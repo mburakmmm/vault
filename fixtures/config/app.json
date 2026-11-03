@@ -1,0 +1,11 @@
+{
+  "service": "vault_api",
+  "port": 7070,
+  "metrics_enabled": true,
+  "rate_limit": 100.5,
+  "tags": ["prod", "security"],
+  "database": {
+    "host": "db.internal",
+    "port": 5432
+  }
+}

@@ -1,0 +1,42 @@
+# Test suite for TOML Source
+# Regression scenarios: FORMAT-01
+
+from nox.test import assert_eq_str, assert_eq_int, assert_true
+from sources.toml import TomlSource
+from core.types import ConfigEntry, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, VAL_ARRAY, VAL_OBJECT
+
+ts: TomlSource = TomlSource("fixtures/config/app.toml", "fixtures", False, 3, "base")
+entries: list[ConfigEntry] = ts.load()
+
+entry_map: dict[str, ConfigEntry] = {}
+idx: int = 0
+while idx < len(entries):
+    entry_map[entries[idx].key] = entries[idx]
+    idx = idx + 1
+
+# Check string
+assert_eq_str(entry_map["service"].val.s, "vault_toml_service", "service name")
+
+# Check int
+assert_eq_int(entry_map["port"].val.i, 7080, "port int")
+
+# Check bool
+assert_true(not entry_map["metrics_enabled"].val.b, "metrics enabled bool false")
+
+# Check float
+assert_true(entry_map["rate_limit"].val.f > 200.0, "rate limit float")
+
+# Check array
+tags_entry: ConfigEntry = entry_map["tags"]
+assert_eq_int(tags_entry.val.kind, VAL_ARRAY, "tags array kind")
+assert_eq_int(len(tags_entry.val.arr), 2, "tags array len")
+assert_eq_str(tags_entry.val.arr[0].s, "toml", "tag 0")
+assert_eq_str(tags_entry.val.arr[1].s, "fast", "tag 1")
+
+# Check nested table
+db_entry: ConfigEntry = entry_map["database"]
+assert_eq_int(db_entry.val.kind, VAL_OBJECT, "db table kind")
+assert_eq_str(db_entry.val.obj["host"].s, "toml.internal", "db host")
+assert_eq_int(db_entry.val.obj["port"].i, 3306, "db port")
+
+print("TOML_SOURCE_TEST: ALL PASS")

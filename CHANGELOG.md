@@ -5,6 +5,21 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-03
+
+### Added
+- Root-constrained safe file handling (`sources/files.nox`) with path-segment-aware canonicalization, directory traversal rejection, and 1 MiB size ceilings.
+- JSON configuration source (`sources/json.nox`) mapping `nox.json` into type-preserving `ConfigValue` hierarchy.
+- TOML configuration source (`sources/toml.nox`) mapping `nox.toml` 1.0 tables, arrays, and scalars.
+- YAML configuration source (`sources/yaml.nox`) mapping `nox.yaml` mappings and sequences.
+- `ConfigBuilder` extension methods `with_allowed_root`, `with_json_file`, `with_toml_file`, `with_yaml_file`, and `with_file`.
+- Configuration fixtures in `fixtures/config/` (`app.json`, `app.toml`, `app.yaml`, `invalid.json`).
+- Test suites:
+  - `tests/json_source_test.nox` (FORMAT-01, FORMAT-02).
+  - `tests/toml_source_test.nox` (FORMAT-01).
+  - `tests/yaml_source_test.nox` (FORMAT-01).
+  - `tests/security_test.nox` (FILE-01, FILE-03, FILE-04).
+
 ## [0.3.0] - 2026-11-03 (MVP Milestone)
 
 ### Added

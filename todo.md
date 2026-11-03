@@ -26,7 +26,7 @@
 | **v0.2.0** | **Faz 1** | Saf (Pure) & Bounded `.env` Ayrıştırıcı (Parser & Tokenizer) | [x] Tamamlandı |
 | **v0.2.5** | **Faz 2** | Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik | [x] Tamamlandı |
 | **v0.3.0** | **Faz 3** | Tipli Şema (Typed Schema) & Toplu Güvenli Doğrulama (**MVP Sürümü**) | [x] Tamamlandı |
-| **v0.4.0** | **Faz 4** | Yapılandırılmış Kaynaklar (JSON, TOML, YAML Köprüleri) & Kök Korumalı Dosyalar | [ ] Beklemede |
+| **v0.4.0** | **Faz 4** | Yapılandırılmış Kaynaklar (JSON, TOML, YAML Köprüleri) & Kök Korumalı Dosyalar | [x] Tamamlandı |
 | **v0.5.0** | **Faz 5** | Profiller (Profiles), Değişken İnterpolasyonu & Sır Bulaşması (Secret Taint) | [ ] Beklemede |
 | **v0.6.0** | **Faz 6** | Sır Sınıflandırması, Maskeleme (Redaction) & Güvenli İnceleme (**Pratik Paket**) | [ ] Beklemede |
 | **v0.7.0** | **Faz 7** | Yerel Sır Sağlayıcıları (Env, Dosya ve Bellek Sağlayıcıları) | [ ] Beklemede |
@@ -161,23 +161,23 @@
 
 ---
 
-### [ ] Sürüm v0.4.0 — Faz 4: Yapılandırılmış Kaynaklar (JSON, TOML, YAML) & Güvenli Dosya Okuma
+### [x] Sürüm v0.4.0 — Faz 4: Yapılandırılmış Kaynaklar (JSON, TOML, YAML) & Güvenli Dosya Okuma
 > **Hedef:** NOX standart kütüphanesini kullanarak JSON, TOML ve YAML dosyalarını tip kaybı yaşamadan yüklemek ve kök dizin güvenliğini sağlamak.
 
-- [ ] **4.1 Kök Dizin ve Dosya Güvenliği (`sources/files.nox`)**
-  - [ ] `canonicalize` ile yol çözümleme.
-  - [ ] Yol segmenti bazlı (path-segment aware) kök dizin (`allowed_root`) sınır denetimi.
-  - [ ] Symlink kaçışı ve `../` dizin geçişi (directory traversal) engelleme (`FILE-01`, `FILE-02`, `FILE-03`).
-  - [ ] Okuma öncesi dosya boyutu kontrolü (1 MiB sınırı) ve dosya varlık kontrolü (`FILE-04`, `FILE-05`).
-- [ ] **4.2 Format Köprüleri (`sources/json.nox`, `sources/toml.nox`, `sources/yaml.nox`)**
-  - [ ] `nox.json.parse` ile JSON -> `ConfigValue` dönüşümü (`json_source_test.nox`).
-  - [ ] `nox.toml.parse` ile TOML 1.0 -> `ConfigValue` dönüşümü (`toml_source_test.nox`).
-  - [ ] `nox.yaml.parse` ile YAML alt kümesi -> `ConfigValue` dönüşümü (`yaml_source_test.nox`).
-  - [ ] Desteklenmeyen veya bozuk formatların güvenli raporlanması (`FORMAT-01`, `FORMAT-02`).
-- [ ] **4.3 Testler (`tests/security_test.nox`, format testleri)**
-  - [ ] Dizin dışına sızma girişimleri testi (`/app/config-evil` vs `/app/config`).
-  - [ ] İçiçe geçmiş (nested) harita ve dizilerin tip korumalı aktarım testleri.
-  - [ ] **Kabul Kapısı (Gate 4):** Biçim köprüleri NOX stdlib üzerinden çalışmalı ve kök dizin sınırları asla aşılamamalıdır.
+- [x] **4.1 Kök Dizin ve Dosya Güvenliği (`sources/files.nox`)**
+  - [x] `canonicalize` ile yol çözümleme.
+  - [x] Yol segmenti bazlı (path-segment aware) kök dizin (`allowed_root`) sınır denetimi.
+  - [x] Symlink kaçışı ve `../` dizin geçişi (directory traversal) engelleme (`FILE-01`, `FILE-02`, `FILE-03`).
+  - [x] Okuma öncesi dosya boyutu kontrolü (1 MiB sınırı) ve dosya varlık kontrolü (`FILE-04`, `FILE-05`).
+- [x] **4.2 Format Köprüleri (`sources/json.nox`, `sources/toml.nox`, `sources/yaml.nox`)**
+  - [x] `nox.json.parse` ile JSON -> `ConfigValue` dönüşümü (`json_source_test.nox`).
+  - [x] `nox.toml.parse` ile TOML 1.0 -> `ConfigValue` dönüşümü (`toml_source_test.nox`).
+  - [x] `nox.yaml.parse` ile YAML alt kümesi -> `ConfigValue` dönüşümü (`yaml_source_test.nox`).
+  - [x] Desteklenmeyen veya bozuk formatların güvenli raporlanması (`FORMAT-01`, `FORMAT-02`).
+- [x] **4.3 Testler (`tests/security_test.nox`, format testleri)**
+  - [x] Dizin dışına sızma girişimleri testi (`/app/config-evil` vs `/app/config`).
+  - [x] İçiçe geçmiş (nested) harita ve dizilerin tip korumalı aktarım testleri.
+  - [x] **Kabul Kapısı (Gate 4):** Biçim köprüleri NOX stdlib üzerinden çalışmalı ve kök dizin sınırları asla aşılamamalıdır.
 
 ---
 

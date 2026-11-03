@@ -1,0 +1,9 @@
+service = "vault_toml_service"
+port = 7080
+metrics_enabled = false
+rate_limit = 250.0
+tags = ["toml", "fast"]
+
+[database]
+host = "toml.internal"
+port = 3306

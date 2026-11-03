@@ -7,6 +7,9 @@ from core.merge import merge_sources
 from core.snapshot import ConfigSnapshot
 from sources.interface import ConfigSource
 from sources.memory import MemorySource
+from sources.json import JsonSource
+from sources.toml import TomlSource
+from sources.yaml import YamlSource
 from env.source import DotenvSource
 from env.process import ProcessEnvSource
 from schema.fields import ConfigSchema
@@ -17,12 +20,18 @@ class ConfigBuilder:
     schema: ConfigSchema | None
     is_production: bool
     builder_version: str
+    allowed_root: str
 
     def __init__(self: ConfigBuilder) -> None:
         self.sources = []
         self.schema = None
         self.is_production = False
         self.builder_version = "v1"
+        self.allowed_root = ""
+
+    def with_allowed_root(self: ConfigBuilder, root: str) -> ConfigBuilder:
+        self.allowed_root = root
+        return self
 
     def with_source(self: ConfigBuilder, src: ConfigSource) -> ConfigBuilder:
         self.sources.append(src)
@@ -33,6 +42,30 @@ class ConfigBuilder:
         for k in defaults:
             ms.set_string(k, defaults[k])
         self.sources.append(ms)
+        return self
+
+    def with_json_file(self: ConfigBuilder, path: str, optional: bool) -> ConfigBuilder:
+        js: JsonSource = JsonSource(path, self.allowed_root, optional, 3, "base")
+        self.sources.append(js)
+        return self
+
+    def with_toml_file(self: ConfigBuilder, path: str, optional: bool) -> ConfigBuilder:
+        ts: TomlSource = TomlSource(path, self.allowed_root, optional, 3, "base")
+        self.sources.append(ts)
+        return self
+
+    def with_yaml_file(self: ConfigBuilder, path: str, optional: bool) -> ConfigBuilder:
+        ys: YamlSource = YamlSource(path, self.allowed_root, optional, 3, "base")
+        self.sources.append(ys)
+        return self
+
+    def with_file(self: ConfigBuilder, path: str, format_name: str, optional: bool) -> ConfigBuilder:
+        if format_name == "json":
+            return self.with_json_file(path, optional)
+        if format_name == "toml":
+            return self.with_toml_file(path, optional)
+        if format_name == "yaml" or format_name == "yml":
+            return self.with_yaml_file(path, optional)
         return self
 
     def with_dotenv(self: ConfigBuilder, path: str, optional: bool) -> ConfigBuilder:

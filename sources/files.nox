@@ -1,0 +1,66 @@
+# VAULT — Root-Constrained Safe File Operations
+# Module: sources.files
+
+from core.errors import ConfigError, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SIZE_LIMIT
+from nox.fs import exists, is_file, metadata, read_to_string, FileMetadata
+from nox.path import canonicalize, components, PathError
+import nox.strings
+
+MAX_CONFIG_FILE_SIZE: int = 1048576 # 1 MiB limit
+
+def check_path_confinement(target_path: str, allowed_root: str) -> str:
+    # If no allowed root specified, just canonicalize
+    if len(allowed_root) == 0:
+        try:
+            return canonicalize(target_path)
+        except PathError:
+            raise ConfigError(ERR_CONFIG_SOURCE_UNAVAILABLE, target_path, "file path cannot be resolved")
+
+    try:
+        canon_root: str = canonicalize(allowed_root)
+    except PathError:
+        raise ConfigError(ERR_CONFIG_PATH_OUTSIDE_ROOT, allowed_root, "allowed root cannot be resolved")
+
+    try:
+        canon_target: str = canonicalize(target_path)
+    except PathError:
+        raise ConfigError(ERR_CONFIG_SOURCE_UNAVAILABLE, target_path, "target path cannot be resolved")
+
+    root_comps: list[str] = components(canon_root)
+    target_comps: list[str] = components(canon_target)
+
+    if len(target_comps) < len(root_comps):
+        raise ConfigError(ERR_CONFIG_PATH_OUTSIDE_ROOT, target_path, "path escapes allowed root (insufficient depth)")
+
+    idx: int = 0
+    while idx < len(root_comps):
+        r_part: str = root_comps[idx]
+        t_part: str = target_comps[idx]
+        # Case-insensitive component comparison for cross-platform robustness
+        if not nox.strings.eq_ignore_case(r_part, t_part):
+            raise ConfigError(ERR_CONFIG_PATH_OUTSIDE_ROOT, target_path, "path escapes allowed root: component mismatch at '" + t_part + "'")
+        idx = idx + 1
+
+    return canon_target
+
+def read_bounded_file(target_path: str, allowed_root: str, optional: bool) -> str:
+    # 1. Verify path exists before attempting canonicalization if optional
+    if not exists(target_path):
+        if optional:
+            return ""
+        raise ConfigError(ERR_CONFIG_SOURCE_UNAVAILABLE, target_path, "required configuration file does not exist")
+
+    # 2. Path confinement check
+    canon_path: str = check_path_confinement(target_path, allowed_root)
+
+    # 3. Must be regular file
+    if not is_file(canon_path):
+        raise ConfigError(ERR_CONFIG_SOURCE_UNAVAILABLE, canon_path, "target is not a regular file")
+
+    # 4. Check file size bound before buffering
+    meta: FileMetadata = metadata(canon_path)
+    if meta.size > MAX_CONFIG_FILE_SIZE:
+        raise ConfigError(ERR_CONFIG_SIZE_LIMIT, canon_path, "configuration file exceeds 1 MiB limit")
+
+    # 5. Safe read
+    return read_to_string(canon_path)

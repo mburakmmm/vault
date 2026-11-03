@@ -1,0 +1,10 @@
+service: vault_yaml_service
+port: 7090
+metrics_enabled: true
+rate_limit: 50.0
+tags:
+  - yaml
+  - structured
+database:
+  host: yaml.internal
+  port: 27017

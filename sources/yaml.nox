@@ -1,0 +1,78 @@
+# VAULT — YAML Configuration Source
+# Module: sources.yaml
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, make_null, make_bool, make_int, make_float, make_string, make_array, make_object, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
+from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR
+from sources.interface import ConfigSource
+from sources.files import read_bounded_file
+from nox.yaml import YamlValue
+import nox.yaml
+
+def _yaml_to_config_value(yv: YamlValue) -> ConfigValue:
+    if yv.kind == 0:
+        return make_string(yv.s)
+    if yv.kind == 1:
+        return make_int(yv.i)
+    if yv.kind == 2:
+        return make_float(yv.f)
+    if yv.kind == 3:
+        return make_bool(yv.b)
+    if yv.kind == 4:
+        return make_null()
+    if yv.kind == 5:
+        arr: list[ConfigValue] = []
+        i: int = 0
+        while i < len(yv.arr):
+            arr.append(_yaml_to_config_value(yv.arr[i]))
+            i = i + 1
+        return make_array(arr)
+    if yv.kind == 6:
+        obj: dict[str, ConfigValue] = {}
+        for k in yv.mapping:
+            obj[k] = _yaml_to_config_value(yv.mapping[k])
+        return make_object(obj)
+    return make_null()
+
+class YamlSource(ConfigSource):
+    path: str
+    allowed_root: str
+    optional: bool
+
+    def __init__(self: YamlSource, path: str, allowed_root: str, optional: bool, rank: int, profile: str) -> None:
+        self.id = path
+        self.kind = "yaml"
+        self.rank = rank
+        self.profile = profile
+        self.path = path
+        self.allowed_root = allowed_root
+        self.optional = optional
+
+    def load(self: YamlSource) -> list[ConfigEntry]:
+        content: str = read_bounded_file(self.path, self.allowed_root, self.optional)
+        entries: list[ConfigEntry] = []
+        if len(content) == 0 and self.optional:
+            return entries
+
+        try:
+            yv: YamlValue = nox.yaml.parse(content)
+        except Exception:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "invalid YAML syntax")
+
+        if yv.kind != 6: # 6 = mapping
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root YAML document must be a mapping")
+
+        for k in yv.mapping:
+            child_yv: YamlValue = yv.mapping[k]
+            cv: ConfigValue = _yaml_to_config_value(child_yv)
+
+            presence: int = PRESENCE_SUPPLIED
+            if cv.kind == 1: # NULL
+                presence = PRESENCE_NULL
+            elif cv.kind == 2 and len(cv.s) == 0: # Empty string
+                presence = PRESENCE_EMPTY
+
+            origin: SourceOrigin = SourceOrigin(self.path, "yaml", self.profile, self.rank)
+            entry: ConfigEntry = ConfigEntry(k, cv, presence, origin, False, False)
+            entries.append(entry)
+
+        return entries

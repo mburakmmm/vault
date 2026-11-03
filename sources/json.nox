@@ -1,0 +1,85 @@
+# VAULT — JSON Configuration Source
+# Module: sources.json
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, make_null, make_bool, make_int, make_float, make_string, make_array, make_object, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
+from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR
+from sources.interface import ConfigSource
+from sources.files import read_bounded_file
+import nox.json
+
+def _json_to_config_value(jv: JsonValue) -> ConfigValue:
+    if nox.json.is_null(jv):
+        return make_null()
+    if nox.json.is_bool(jv):
+        return make_bool(nox.json.as_bool(jv))
+    if nox.json.is_number(jv):
+        num_f: float = nox.json.as_number(jv)
+        num_i: int = int(num_f)
+        if float(num_i) == num_f:
+            return make_int(num_i)
+        return make_float(num_f)
+    if nox.json.is_string(jv):
+        return make_string(nox.json.as_string(jv))
+    if nox.json.is_array(jv):
+        arr: list[ConfigValue] = []
+        i: int = 0
+        while i < nox.json.array_len(jv):
+            arr.append(_json_to_config_value(nox.json.array_get(jv, i)))
+            i = i + 1
+        return make_array(arr)
+    if nox.json.is_object(jv):
+        obj: dict[str, ConfigValue] = {}
+        i: int = 0
+        while i < nox.json.object_len(jv):
+            k: str = nox.json.object_key(jv, i)
+            obj[k] = _json_to_config_value(nox.json.object_value(jv, i))
+            i = i + 1
+        return make_object(obj)
+    return make_null()
+
+class JsonSource(ConfigSource):
+    path: str
+    allowed_root: str
+    optional: bool
+
+    def __init__(self: JsonSource, path: str, allowed_root: str, optional: bool, rank: int, profile: str) -> None:
+        self.id = path
+        self.kind = "json"
+        self.rank = rank
+        self.profile = profile
+        self.path = path
+        self.allowed_root = allowed_root
+        self.optional = optional
+
+    def load(self: JsonSource) -> list[ConfigEntry]:
+        content: str = read_bounded_file(self.path, self.allowed_root, self.optional)
+        entries: list[ConfigEntry] = []
+        if len(content) == 0 and self.optional:
+            return entries
+
+        try:
+            jv: JsonValue = nox.json.parse(content)
+        except Exception:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "invalid JSON syntax")
+
+        if not nox.json.is_object(jv):
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root JSON entity must be an object")
+
+        i: int = 0
+        while i < nox.json.object_len(jv):
+            k: str = nox.json.object_key(jv, i)
+            child_jv: JsonValue = nox.json.object_value(jv, i)
+            cv: ConfigValue = _json_to_config_value(child_jv)
+
+            presence: int = PRESENCE_SUPPLIED
+            if cv.kind == 1: # NULL
+                presence = PRESENCE_NULL
+            elif cv.kind == 2 and len(cv.s) == 0: # Empty string
+                presence = PRESENCE_EMPTY
+
+            origin: SourceOrigin = SourceOrigin(self.path, "json", self.profile, self.rank)
+            entry: ConfigEntry = ConfigEntry(k, cv, presence, origin, False, False)
+            entries.append(entry)
+            i = i + 1
+
+        return entries

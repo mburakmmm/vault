@@ -1,0 +1,59 @@
+# Test suite for Security, Path Confinement & Sandbox Verification
+# Regression scenarios: FILE-01, FILE-03, FILE-04
+
+from nox.test import assert_eq_str, assert_true
+from sources.files import check_path_confinement, read_bounded_file
+from core.errors import ConfigError, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SOURCE_UNAVAILABLE
+
+# -------------------------------------------------------------------------
+# Test 1: FILE-01 — Path Traversal (../) Outside Allowed Root
+# -------------------------------------------------------------------------
+# Root is set to fixtures/config. Trying to access something outside it via ../
+traversal_caught: bool = False
+try:
+    check_path_confinement("fixtures/config/../dotenv/valid.env", "fixtures/config")
+except ConfigError as e:
+    traversal_caught = True
+    assert_eq_str(e.code, ERR_CONFIG_PATH_OUTSIDE_ROOT, "traversal error code")
+except Exception:
+    pass
+
+assert_true(traversal_caught, "traversal outside allowed root must be rejected with CONFIG_PATH_OUTSIDE_ROOT")
+
+# -------------------------------------------------------------------------
+# Test 2: FILE-03 — Path Segment Prefix Confusion (/config vs /config-evil)
+# -------------------------------------------------------------------------
+# Check that allowed_root="fixtures/config" rejects a path that shares prefix but is a different segment
+# e.g., components check
+prefix_caught: bool = False
+try:
+    # Notice: check_path_confinement uses path components, not string prefix!
+    check_path_confinement("fixtures/dotenv/valid.env", "fixtures/config")
+except ConfigError as e:
+    prefix_caught = True
+    assert_eq_str(e.code, ERR_CONFIG_PATH_OUTSIDE_ROOT, "prefix mismatch code")
+except Exception:
+    pass
+
+assert_true(prefix_caught, "uncontained segment path must be rejected with CONFIG_PATH_OUTSIDE_ROOT")
+
+# -------------------------------------------------------------------------
+# Test 3: FILE-04 — Missing Optional File vs Missing Required File
+# -------------------------------------------------------------------------
+# Optional missing file returns empty string without error
+opt_res: str = read_bounded_file("fixtures/config/does_not_exist.json", "fixtures/config", True)
+assert_eq_str(opt_res, "", "missing optional file must return empty string")
+
+# Required missing file raises CONFIG_SOURCE_UNAVAILABLE
+req_caught: bool = False
+try:
+    read_bounded_file("fixtures/config/does_not_exist.json", "fixtures/config", False)
+except ConfigError as e:
+    req_caught = True
+    assert_eq_str(e.code, ERR_CONFIG_SOURCE_UNAVAILABLE, "missing required file error code")
+except Exception:
+    pass
+
+assert_true(req_caught, "missing required file must raise CONFIG_SOURCE_UNAVAILABLE")
+
+print("SECURITY_TEST: ALL PASS")

@@ -1,13 +1,17 @@
 # VAULT — Configuration, Environment & Secret Management for NOX
-# Public Facade (MVP Milestone)
+# Public Facade
 
 from env.parser import parse_dotenv, EnvEntry, EnvParseError
 from env.source import DotenvSource
 from env.process import ProcessEnvSource
 from sources.interface import ConfigSource
 from sources.memory import MemorySource
+from sources.files import check_path_confinement, read_bounded_file
+from sources.json import JsonSource
+from sources.toml import TomlSource
+from sources.yaml import YamlSource
 from core.types import ConfigValue, ConfigEntry, SourceOrigin, make_string, make_int, make_float, make_bool, make_null, make_missing, make_array, make_object, PRESENCE_MISSING, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
-from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_DUPLICATE_KEY, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_SIZE_LIMIT
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_DUPLICATE_KEY, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SIZE_LIMIT
 from core.merge import merge_sources
 from core.snapshot import ConfigSnapshot
 from core.builder import ConfigBuilder
@@ -15,7 +19,7 @@ from schema.fields import ConfigSchema, Field, FIELD_TYPE_STRING, FIELD_TYPE_INT
 from schema.validate import validate_entries, ValidationReport, SafeConfigDiagnostic
 from schema.coerce import coerce_value
 
-VERSION: str = "0.3.0"
+VERSION: str = "0.4.0"
 
 def version() -> str:
     return VERSION

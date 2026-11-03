@@ -1,0 +1,78 @@
+# VAULT — TOML Configuration Source
+# Module: sources.toml
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, make_null, make_bool, make_int, make_float, make_string, make_array, make_object, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
+from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR
+from sources.interface import ConfigSource
+from sources.files import read_bounded_file
+from nox.toml import TomlValue
+import nox.toml
+
+def _toml_to_config_value(tv: TomlValue) -> ConfigValue:
+    if tv.kind == 0:
+        return make_string(tv.s)
+    if tv.kind == 1:
+        return make_int(tv.i)
+    if tv.kind == 2:
+        return make_float(tv.f)
+    if tv.kind == 3:
+        return make_bool(tv.b)
+    if tv.kind == 4:
+        arr: list[ConfigValue] = []
+        i: int = 0
+        while i < len(tv.arr):
+            arr.append(_toml_to_config_value(tv.arr[i]))
+            i = i + 1
+        return make_array(arr)
+    if tv.kind == 5:
+        obj: dict[str, ConfigValue] = {}
+        for k in tv.tbl:
+            obj[k] = _toml_to_config_value(tv.tbl[k])
+        return make_object(obj)
+    if tv.kind == 6:
+        return make_string(tv.s)
+    return make_null()
+
+class TomlSource(ConfigSource):
+    path: str
+    allowed_root: str
+    optional: bool
+
+    def __init__(self: TomlSource, path: str, allowed_root: str, optional: bool, rank: int, profile: str) -> None:
+        self.id = path
+        self.kind = "toml"
+        self.rank = rank
+        self.profile = profile
+        self.path = path
+        self.allowed_root = allowed_root
+        self.optional = optional
+
+    def load(self: TomlSource) -> list[ConfigEntry]:
+        content: str = read_bounded_file(self.path, self.allowed_root, self.optional)
+        entries: list[ConfigEntry] = []
+        if len(content) == 0 and self.optional:
+            return entries
+
+        try:
+            tv: TomlValue = nox.toml.parse(content)
+        except Exception:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "invalid TOML syntax")
+
+        if tv.kind != 5: # 5 = table
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root TOML document must be a table")
+
+        for k in tv.tbl:
+            child_tv: TomlValue = tv.tbl[k]
+            cv: ConfigValue = _toml_to_config_value(child_tv)
+
+            presence: int = PRESENCE_SUPPLIED
+            if cv.kind == 1: # NULL
+                presence = PRESENCE_NULL
+            elif cv.kind == 2 and len(cv.s) == 0: # Empty string
+                presence = PRESENCE_EMPTY
+
+            origin: SourceOrigin = SourceOrigin(self.path, "toml", self.profile, self.rank)
+            entry: ConfigEntry = ConfigEntry(k, cv, presence, origin, False, False)
+            entries.append(entry)
+
+        return entries
