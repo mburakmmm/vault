@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify NOX toolchain
+        run: |
+          noxc version || echo "Ensure noxc is configured in environment"
+
+      - name: Type Check
+        run: |
+          noxc check vault.nox
+
+      - name: Run Test Suite
+        run: |
+          noxc test
