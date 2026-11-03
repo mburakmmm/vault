@@ -1,0 +1,150 @@
+# VAULT — Secret Classification, Redaction and Safe Inspection Test Suite
+# Tests: SECRET-01, SECRET-02, SECRET-03, Redacted JSON, Cache, Taint Redaction
+
+from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
+from core.errors import ConfigError, ERR_CONFIG_MISSING
+from schema.fields import ConfigSchema
+from secrets.mark import SecretValue, REDACTED_LABEL
+from secrets.redact import redact_string, to_redacted_json
+from secrets.cache import SecretCache
+import nox.strings
+
+TEST_SENTINEL: str = "VAULT_TEST_SECRET_DO_NOT_PRINT_9E2D"
+TEST_SENTINEL_2: str = "SUPER_SECRET_TOKEN_XYZ_999"
+
+def test_secret_01_text_redaction() -> None:
+    # Defense in depth: redact_string replaces all occurrences of sentinels
+    sentinels: list[str] = [TEST_SENTINEL, TEST_SENTINEL_2]
+    raw_log: str = "Connecting with token " + TEST_SENTINEL + " and secondary " + TEST_SENTINEL_2 + " to cluster."
+    clean_log: str = redact_string(raw_log, sentinels)
+
+    # Sentinel must be completely absent from clean_log
+    assert TEST_SENTINEL not in clean_log
+    assert TEST_SENTINEL_2 not in clean_log
+    assert "[REDACTED]" in clean_log
+    print("PASS: test_secret_01_text_redaction")
+
+def test_secret_02_redacted_json_and_explain() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, True, "SecureService", False, True)
+    schema.add_int("PORT", True, True, 8080, False, 0, False, 0, False)
+    schema.add_string("API_KEY", True, False, "", True, True)
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_override("API_KEY", TEST_SENTINEL)
+
+    snap: ConfigSnapshot = builder.build()
+
+    # 1. Verify explain() does not leak the secret sentinel
+    exp: str = snap.explain("API_KEY")
+    assert TEST_SENTINEL not in exp
+    assert "is_secret=true" in exp
+
+    # 2. Verify describe() does not leak the secret sentinel
+    desc: str = snap.describe("API_KEY")
+    assert TEST_SENTINEL not in desc
+    assert "is_secret=true" in desc
+
+    # 3. Verify redacted_json() does not leak the secret sentinel
+    json_repr: str = snap.redacted_json()
+    assert TEST_SENTINEL not in json_repr
+    assert "\"API_KEY\": \"[REDACTED]\"" in json_repr
+    # Non-secret fields must be present and unredacted
+    assert "\"APP_NAME\": \"SecureService\"" in json_repr
+    assert "\"PORT\": 8080" in json_repr
+    print("PASS: test_secret_02_redacted_json_and_explain")
+
+def test_secret_03_explicit_retrieval() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("DB_PASSWORD", True, False, "", True, True)
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_override("DB_PASSWORD", TEST_SENTINEL)
+
+    snap: ConfigSnapshot = builder.build()
+
+    # Explicit get_secret retrieves the exact authorized value
+    retrieved: str = snap.get_secret("DB_PASSWORD")
+    assert retrieved == TEST_SENTINEL
+
+    # Explicit get_secret_value wrapper
+    sec_val: SecretValue = snap.get_secret_value("DB_PASSWORD")
+    # Default string representation must be [REDACTED]
+    assert sec_val.to_string() == "[REDACTED]"
+    # Explicit reveal() gets the exact secret
+    assert sec_val.reveal() == TEST_SENTINEL
+    assert sec_val.length() == len(TEST_SENTINEL)
+    print("PASS: test_secret_03_explicit_retrieval")
+
+def test_taint_propagation_redaction() -> None:
+    # When a key is interpolated from a secret, its derived value must also be redacted in JSON
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("RAW_TOKEN", True, False, "", True, True)
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_override("RAW_TOKEN", TEST_SENTINEL)
+    builder.with_override("AUTH_HEADER", "Bearer ${RAW_TOKEN}")
+
+    snap: ConfigSnapshot = builder.build()
+
+    # RAW_TOKEN is explicit secret
+    assert snap.entries["RAW_TOKEN"].is_secret
+    # AUTH_HEADER must be tainted secret
+    assert snap.entries["AUTH_HEADER"].is_secret
+
+    # Both must be [REDACTED] in redacted_json()
+    json_out: str = snap.redacted_json()
+    assert TEST_SENTINEL not in json_out
+    assert "\"RAW_TOKEN\": \"[REDACTED]\"" in json_out
+    assert "\"AUTH_HEADER\": \"[REDACTED]\"" in json_out
+
+    # Authorized get_secret on derived field returns expanded value
+    assert snap.get_secret("AUTH_HEADER") == "Bearer " + TEST_SENTINEL
+    print("PASS: test_taint_propagation_redaction")
+
+def test_secret_cache_ttl() -> None:
+    cache: SecretCache = SecretCache()
+    now_t: int = 1000
+
+    # Store with TTL of 10 seconds (expires at 1010)
+    cache.set("vault_token", TEST_SENTINEL, 10, now_t)
+
+    assert cache.has("vault_token", now_t)
+    assert cache.active_count(now_t) == 1
+
+    # Fetch before expiration (at now + 5s)
+    cached_val: str | None = cache.get("vault_token", now_t + 5)
+    assert cached_val is not None
+    if cached_val is not None:
+        assert cached_val == TEST_SENTINEL
+
+    # Fetch after expiration (at now + 11s) -> evicted automatically
+    expired_val: str | None = cache.get("vault_token", now_t + 11)
+    assert expired_val is None
+    assert not cache.has("vault_token", now_t + 11)
+    assert cache.active_count(now_t + 11) == 0
+
+    # Test explicit evict and clear
+    cache.set("key1", "val1", 60, now_t)
+    cache.set("key2", "val2", 60, now_t)
+    assert cache.active_count(now_t) == 2
+
+    cache.evict("key1")
+    assert not cache.has("key1", now_t)
+    assert cache.has("key2", now_t)
+
+    cache.clear()
+    assert cache.active_count(now_t) == 0
+    print("PASS: test_secret_cache_ttl")
+
+# Run all test functions
+test_secret_01_text_redaction()
+test_secret_02_redacted_json_and_explain()
+test_secret_03_explicit_retrieval()
+test_taint_propagation_redaction()
+test_secret_cache_ttl()
+print("ALL REDACTION TESTS PASSED SUCCESSFULLY!")

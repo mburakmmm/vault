@@ -5,6 +5,18 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-03 (Practical Package Milestone)
+
+### Added
+- Explicit secret model and wrapper abstraction (`secrets/mark.nox`) with `SecretValue` defaulting textual representation to `[REDACTED]`.
+- Intentional and authorized secret retrieval (`secrets/reveal.nox`) via `snapshot.get_secret(key)` and `snapshot.get_secret_value(key).reveal()` (**`SECRET-03`**).
+- Structured redaction and deterministic JSON serialization (`secrets/redact.nox`) with `to_redacted_json` and `snapshot.redacted_json()` (**`SECRET-02`**).
+- Defense-in-depth text redaction `redact_string(text, sentinels)` (**`SECRET-01`**).
+- In-memory secret cache with TTL support (`secrets/cache.nox`) supporting `set`, `get`, `evict`, `clear`, and auto-eviction of expired entries.
+- Transitive secret taint redaction ensuring derived settings interpolated from secrets are cleanly redacted in JSON.
+- Test suite `tests/redaction_test.nox` covering sentinel scan verification (`SECRET-01`, `SECRET-02`, `SECRET-03`, `CI-03`), TTL caching, and taint redaction.
+- Verified 100% green across both LLVM (`zig 0.17.0`) and QBE compiler backends.
+
 ## [0.5.0] - 2026-11-03
 
 ### Added

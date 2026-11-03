@@ -3,6 +3,9 @@
 
 from core.types import ConfigEntry, ConfigValue, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, VAL_ARRAY, PRESENCE_NULL, PRESENCE_MISSING
 from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH
+from secrets.mark import SecretValue
+from secrets.reveal import reveal_secret_entry, create_secret_value
+from secrets.redact import to_redacted_json
 import nox.strings
 
 class ConfigSnapshot:
@@ -158,6 +161,22 @@ class ConfigSnapshot:
 
         # Notice: value is NEVER included in explain!
         return "key='" + key + "', presence=" + str(e.presence) + ", source_kind=" + e.origin.source_kind + ", source_id='" + e.origin.source_id + "', profile=" + e.origin.profile + ", rank=" + str(e.origin.precedence_rank) + ", is_secret=" + secret_str
+
+    def get_secret(self: ConfigSnapshot, key: str) -> str:
+        if key not in self.entries:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration secret is missing")
+        return reveal_secret_entry(self.entries[key])
+
+    def get_secret_value(self: ConfigSnapshot, key: str) -> SecretValue:
+        if key not in self.entries:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration secret is missing")
+        return create_secret_value(self.entries[key])
+
+    def describe(self: ConfigSnapshot, key: str) -> str:
+        return self.explain(key)
+
+    def redacted_json(self: ConfigSnapshot) -> str:
+        return to_redacted_json(self.entries)
 
     def version(self: ConfigSnapshot) -> str:
         return self.snapshot_version

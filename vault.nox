@@ -20,8 +20,11 @@ from schema.validate import validate_entries, ValidationReport, SafeConfigDiagno
 from schema.coerce import coerce_value
 from profiles.overlay import validate_profile_name, is_valid_profile_name, is_production_profile, profile_filename, is_standard_profile
 from interpolate.resolve import resolve_interpolations
+from secrets.mark import SecretValue, REDACTED_LABEL
+from secrets.redact import redact_string, to_redacted_json
+from secrets.cache import SecretCache, CachedSecret
 
-VERSION: str = "0.5.0"
+VERSION: str = "0.6.0"
 
 def version() -> str:
     return VERSION

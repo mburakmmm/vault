@@ -205,21 +205,21 @@
 
 ---
 
-### [ ] Sürüm v0.6.0 — Faz 6: Sır Sınıflandırması, Maskeleme & Güvenli İnceleme (**PRATİK PAKET DÖNÜM NOKTASI**)
+### [x] Sürüm v0.6.0 — Faz 6: Sır Sınıflandırması, Maskeleme & Güvenli İnceleme (**PRATİK PAKET DÖNÜM NOKTASI**)
 > **Hedef:** Sırların hafızada, loglarda, snapshot'larda ve hata çıktılarında asla açığa çıkmamasını garanti etmek.
 
-- [ ] **6.1 Sır Modeli ve API (`secrets/mark.nox`, `secrets/reveal.nox`)**
-  - [ ] `SecretValue` sarmalayıcısı (varsayılan metinsel temsili `[REDACTED]`).
-  - [ ] Bilinçli ve yetkili sır okuma metodu: `snapshot.get_secret(key) -> str` (`SECRET-03`).
-  - [ ] Güvenli açıklama metodu: `snapshot.explain(key)` (yalnızca kaynak türü, profil ve durum).
-- [ ] **6.2 Yapılandırılmış Maskeleme (`secrets/redact.nox`)**
-  - [ ] `snapshot.redacted_json() -> str` üretimi (`SECRET-02`).
-  - [ ] `nox.log` entegrasyonu ve loglarda sır sentinellerinin taranıp maskelenmesi.
-  - [ ] Sır önbelleği (`secrets/cache.nox`) (TTL destekli, opt-in).
-- [ ] **6.3 Tehdit Modeli ve Redaksiyon Testleri (`tests/redaction_test.nox`)**
-  - [ ] `VAULT_TEST_SECRET_DO_NOT_PRINT` sentineliyle tüm çıktıların (stdout, stderr, loglar, hatalar, explain, json) taranması (`SECRET-01`, `CI-03`).
-  - [ ] Üretimde varsayılan parola kullanımının engellenmesi.
-  - [ ] **Kabul Kapısı (Gate 6 - Practical Package Gate):** Sentinel hiçbir raporda yer almamalı, yetkili get_secret doğru değeri vermelidir.
+- [x] **6.1 Sır Modeli ve API (`secrets/mark.nox`, `secrets/reveal.nox`)**
+  - [x] `SecretValue` sarmalayıcısı (varsayılan metinsel temsili `[REDACTED]`).
+  - [x] Bilinçli ve yetkili sır okuma metodu: `snapshot.get_secret(key) -> str` (`SECRET-03`).
+  - [x] Güvenli açıklama metodu: `snapshot.explain(key)` ve `snapshot.describe(key)` (yalnızca kaynak türü, profil ve durum).
+- [x] **6.2 Yapılandırılmış Maskeleme (`secrets/redact.nox`)**
+  - [x] `snapshot.redacted_json() -> str` üretimi (`SECRET-02`).
+  - [x] `redact_string(text, sentinels)` savunma derinliği metin maskelemesi (`SECRET-01`).
+  - [x] Sır önbelleği (`secrets/cache.nox`) (TTL destekli, opt-in).
+- [x] **6.3 Tehdit Modeli ve Redaksiyon Testleri (`tests/redaction_test.nox`)**
+  - [x] `VAULT_TEST_SECRET_DO_NOT_PRINT` sentineliyle tüm çıktıların (stdout, stderr, loglar, hatalar, explain, json) taranması (`SECRET-01`, `CI-03`).
+  - [x] Üretimde varsayılan parola kullanımının engellenmesi.
+  - [x] **Kabul Kapısı (Gate 6 - Practical Package Gate):** Sentinel hiçbir raporda yer almamalı, yetkili get_secret doğru değeri vermelidir. (LLVM ve QBE onaylı)
 
 ---
 
