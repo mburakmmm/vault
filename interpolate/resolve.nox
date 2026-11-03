@@ -1,0 +1,223 @@
+# VAULT — Deterministic String Interpolation Engine
+# Module: interpolate.resolve
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, VAL_ARRAY, VAL_OBJECT, PRESENCE_SUPPLIED, make_string
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_INTERPOLATION_CYCLE, ERR_CONFIG_SIZE_LIMIT, ERR_CONFIG_TYPE_MISMATCH
+import nox.strings
+
+MAX_INTERPOLATION_DEPTH: int = 16
+MAX_EXPANSION_LEN: int = 131072 # 128 KiB
+MAX_REFS_PER_VALUE: int = 64
+
+class SubstituteResult:
+    expanded: str
+    is_secret: bool
+
+    def __init__(self: SubstituteResult, expanded: str, is_secret: bool) -> None:
+        self.expanded = expanded
+        self.is_secret = is_secret
+
+def _list_contains(items: list[str], target: str) -> bool:
+    idx: int = 0
+    while idx < len(items):
+        if items[idx] == target:
+            return True
+        idx = idx + 1
+    return False
+
+def _val_to_string(v: ConfigValue, key: str) -> str:
+    if v.kind == VAL_STRING:
+        return v.s
+    if v.kind == VAL_INTEGER:
+        return str(v.i)
+    if v.kind == VAL_FLOAT:
+        return str(v.f)
+    if v.kind == VAL_BOOLEAN:
+        return "true" if v.b else "false"
+    if v.kind == VAL_ARRAY or v.kind == VAL_OBJECT:
+        raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "cannot interpolate complex container into string")
+    return ""
+
+def extract_template_references(template: str, key_context: str) -> list[str]:
+    refs: list[str] = []
+    n: int = len(template)
+    i: int = 0
+    while i < n:
+        ch: str = template[i:i + 1]
+        if ch == "$":
+            if i + 1 < n and template[i:i + 2] == "$$":
+                i = i + 2
+            elif i + 1 < n and template[i:i + 2] == "${":
+                j: int = i + 2
+                found_close: bool = False
+                while j < n and not found_close:
+                    if template[j:j + 1] == "}":
+                        found_close = True
+                    else:
+                        j = j + 1
+                if not found_close:
+                    raise ConfigError(ERR_CONFIG_PARSE_ERROR, key_context, "unclosed interpolation expression in template")
+                expr: str = template[i + 2:j]
+                dash_idx: int = nox.strings.index_of(expr, ":-")
+                raw_ref: str = expr[0:dash_idx] if dash_idx >= 0 else expr
+                ref_k: str = nox.strings.trim(raw_ref)
+                if len(ref_k) > 0:
+                    if not _list_contains(refs, ref_k):
+                        if len(refs) >= MAX_REFS_PER_VALUE:
+                            raise ConfigError(ERR_CONFIG_SIZE_LIMIT, key_context, "exceeded maximum references per value (64)")
+                        refs.append(ref_k)
+                i = j + 1
+            else:
+                i = i + 1
+        else:
+            i = i + 1
+    return refs
+
+def substitute_template(key: str, template: str, merged: dict[str, ConfigEntry]) -> SubstituteResult:
+    res: str = ""
+    is_tainted: bool = False
+    n: int = len(template)
+    i: int = 0
+
+    while i < n:
+        ch: str = template[i:i + 1]
+        if ch == "$":
+            if i + 1 < n and template[i:i + 2] == "$$":
+                # Escaped '$$' -> single '$'
+                res = res + "$"
+                i = i + 2
+            elif i + 1 < n and template[i:i + 2] == "${":
+                # Interpolation expression ${KEY} or ${KEY:-default}
+                j: int = i + 2
+                found_close: bool = False
+                while j < n and not found_close:
+                    if template[j:j + 1] == "}":
+                        found_close = True
+                    else:
+                        j = j + 1
+                if not found_close:
+                    raise ConfigError(ERR_CONFIG_PARSE_ERROR, key, "unclosed interpolation expression in template")
+
+                expr: str = template[i + 2:j]
+                dash_idx: int = nox.strings.index_of(expr, ":-")
+                ref_k: str = ""
+                default_v: str = ""
+                has_def: bool = False
+
+                if dash_idx >= 0:
+                    ref_k = nox.strings.trim(expr[0:dash_idx])
+                    default_v = expr[dash_idx + 2:len(expr)]
+                    has_def = True
+                else:
+                    ref_k = nox.strings.trim(expr)
+
+                repl: str = ""
+                if ref_k in merged:
+                    ref_entry: ConfigEntry = merged[ref_k]
+                    # Taint propagation check
+                    if ref_entry.is_secret:
+                        is_tainted = True
+
+                    if ref_entry.presence == PRESENCE_SUPPLIED:
+                        val_str: str = _val_to_string(ref_entry.val, ref_k)
+                        if len(val_str) == 0 and has_def:
+                            repl = default_v
+                        else:
+                            repl = val_str
+                    else:
+                        if has_def:
+                            repl = default_v
+                        else:
+                            raise ConfigError(ERR_CONFIG_MISSING, ref_k, "interpolation reference not found: " + ref_k)
+                else:
+                    if has_def:
+                        repl = default_v
+                    else:
+                        raise ConfigError(ERR_CONFIG_MISSING, ref_k, "interpolation reference not found: " + ref_k)
+
+                res = res + repl
+                if len(res) > MAX_EXPANSION_LEN:
+                    raise ConfigError(ERR_CONFIG_SIZE_LIMIT, key, "interpolation expansion exceeds 128 KiB limit")
+                i = j + 1
+            else:
+                res = res + "$"
+                i = i + 1
+        else:
+            res = res + ch
+            i = i + 1
+            if len(res) > MAX_EXPANSION_LEN:
+                raise ConfigError(ERR_CONFIG_SIZE_LIMIT, key, "interpolation expansion exceeds 128 KiB limit")
+
+    return SubstituteResult(res, is_tainted)
+
+class InterpolationResolver:
+    deps: dict[str, list[str]]
+    merged: dict[str, ConfigEntry]
+    state: dict[str, int]
+    ordered_keys: list[str]
+
+    def __init__(self: InterpolationResolver, merged: dict[str, ConfigEntry]) -> None:
+        self.merged = merged
+        self.deps = {}
+        self.state = {}
+        self.ordered_keys = []
+
+    def dfs(self: InterpolationResolver, u: str, current_depth: int) -> None:
+        if current_depth > MAX_INTERPOLATION_DEPTH:
+            raise ConfigError(ERR_CONFIG_SIZE_LIMIT, u, "interpolation depth limit (16) exceeded")
+
+        self.state[u] = 1 # GRAY (visiting)
+
+        if u in self.deps:
+            u_deps: list[str] = self.deps[u]
+            d_idx: int = 0
+            while d_idx < len(u_deps):
+                v: str = u_deps[d_idx]
+                if v in self.merged:
+                    v_state: int = self.state[v] if v in self.state else 0
+                    if v_state == 1:
+                        raise ConfigError(ERR_CONFIG_INTERPOLATION_CYCLE, u, "cyclic reference detected in interpolation: " + u + " -> " + v)
+                    elif v_state == 0:
+                        self.dfs(v, current_depth + 1)
+                d_idx = d_idx + 1
+
+        self.state[u] = 2 # BLACK (finished)
+        self.ordered_keys.append(u)
+
+def resolve_interpolations(merged: dict[str, ConfigEntry]) -> dict[str, ConfigEntry]:
+    resolver: InterpolationResolver = InterpolationResolver(merged)
+
+    # 1. Extract dependency graph for all entries
+    all_keys: list[str] = merged.keys()
+    k_idx: int = 0
+    while k_idx < len(all_keys):
+        k: str = all_keys[k_idx]
+        entry: ConfigEntry = merged[k]
+        if entry.presence == PRESENCE_SUPPLIED and entry.val.kind == VAL_STRING:
+            resolver.deps[k] = extract_template_references(entry.val.s, k)
+        else:
+            resolver.deps[k] = []
+        k_idx = k_idx + 1
+
+    # 2. Cycle detection and topological sort
+    k2_idx: int = 0
+    while k2_idx < len(all_keys):
+        k2: str = all_keys[k2_idx]
+        k_state: int = resolver.state[k2] if k2 in resolver.state else 0
+        if k_state == 0:
+            resolver.dfs(k2, 0)
+        k2_idx = k2_idx + 1
+
+    # 3. Resolve substitutions in topological order (dependencies before dependents)
+    idx: int = 0
+    while idx < len(resolver.ordered_keys):
+        ok: str = resolver.ordered_keys[idx]
+        o_entry: ConfigEntry = merged[ok]
+        if o_entry.presence == PRESENCE_SUPPLIED and o_entry.val.kind == VAL_STRING:
+            s_res: SubstituteResult = substitute_template(ok, o_entry.val.s, merged)
+            o_entry.val = make_string(s_res.expanded)
+            if s_res.is_secret:
+                o_entry.is_secret = True
+        idx = idx + 1
+
+    return merged

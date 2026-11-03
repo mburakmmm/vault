@@ -157,7 +157,7 @@ class ConfigSnapshot:
             secret_str = "true"
 
         # Notice: value is NEVER included in explain!
-        return "key='" + key + "', presence=" + str(e.presence) + ", source_kind=" + e.origin.source_kind + ", source_id='" + e.origin.source_id + "', rank=" + str(e.origin.precedence_rank) + ", is_secret=" + secret_str
+        return "key='" + key + "', presence=" + str(e.presence) + ", source_kind=" + e.origin.source_kind + ", source_id='" + e.origin.source_id + "', profile=" + e.origin.profile + ", rank=" + str(e.origin.precedence_rank) + ", is_secret=" + secret_str
 
     def version(self: ConfigSnapshot) -> str:
         return self.snapshot_version

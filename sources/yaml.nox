@@ -28,8 +28,12 @@ def _yaml_to_config_value(yv: YamlValue) -> ConfigValue:
         return make_array(arr)
     if yv.kind == 6:
         obj: dict[str, ConfigValue] = {}
-        for k in yv.mapping:
+        m_keys: list[str] = yv.mapping.keys()
+        m_idx: int = 0
+        while m_idx < len(m_keys):
+            k: str = m_keys[m_idx]
             obj[k] = _yaml_to_config_value(yv.mapping[k])
+            m_idx = m_idx + 1
         return make_object(obj)
     return make_null()
 
@@ -61,7 +65,10 @@ class YamlSource(ConfigSource):
         if yv.kind != 6: # 6 = mapping
             raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root YAML document must be a mapping")
 
-        for k in yv.mapping:
+        m_keys2: list[str] = yv.mapping.keys()
+        m2_idx: int = 0
+        while m2_idx < len(m_keys2):
+            k: str = m_keys2[m2_idx]
             child_yv: YamlValue = yv.mapping[k]
             cv: ConfigValue = _yaml_to_config_value(child_yv)
 
@@ -74,5 +81,6 @@ class YamlSource(ConfigSource):
             origin: SourceOrigin = SourceOrigin(self.path, "yaml", self.profile, self.rank)
             entry: ConfigEntry = ConfigEntry(k, cv, presence, origin, False, False)
             entries.append(entry)
+            m2_idx = m2_idx + 1
 
         return entries

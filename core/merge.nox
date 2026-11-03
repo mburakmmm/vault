@@ -28,10 +28,17 @@ def _sort_sources(sources: list[ConfigSource]) -> list[ConfigSource]:
 
 def _merge_objects(base_obj: dict[str, ConfigValue], incoming_obj: dict[str, ConfigValue], prefix: str) -> dict[str, ConfigValue]:
     new_obj: dict[str, ConfigValue] = {}
-    for k in base_obj:
-        new_obj[k] = base_obj[k]
+    b_keys: list[str] = base_obj.keys()
+    b_idx: int = 0
+    while b_idx < len(b_keys):
+        bk: str = b_keys[b_idx]
+        new_obj[bk] = base_obj[bk]
+        b_idx = b_idx + 1
 
-    for k in incoming_obj:
+    inc_keys: list[str] = incoming_obj.keys()
+    inc_idx: int = 0
+    while inc_idx < len(inc_keys):
+        k: str = inc_keys[inc_idx]
         if k in new_obj:
             b_val: ConfigValue = new_obj[k]
             inc_val: ConfigValue = incoming_obj[k]
@@ -46,6 +53,7 @@ def _merge_objects(base_obj: dict[str, ConfigValue], incoming_obj: dict[str, Con
                 new_obj[k] = inc_val
         else:
             new_obj[k] = incoming_obj[k]
+        inc_idx = inc_idx + 1
 
     return new_obj
 

@@ -1,0 +1,166 @@
+# VAULT — Profile Overlay and Environment Layering Test Suite
+# Tests: PROFILE-01, PROFILE-02, Profile Precedence, Filename Formatting
+
+from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
+from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_MISSING
+from schema.fields import ConfigSchema
+from profiles.overlay import validate_profile_name, is_valid_profile_name, is_standard_profile, is_production_profile, profile_filename
+from sources.memory import MemorySource
+
+def test_profile_name_validation() -> None:
+    # Standard profiles
+    assert is_valid_profile_name("development")
+    assert is_valid_profile_name("test")
+    assert is_valid_profile_name("staging")
+    assert is_valid_profile_name("production")
+    assert is_valid_profile_name("dev")
+    assert is_valid_profile_name("prod")
+    assert is_standard_profile("development")
+    assert is_standard_profile("test")
+    assert is_standard_profile("staging")
+    assert is_standard_profile("production")
+
+    # Custom sanitized profiles
+    assert is_valid_profile_name("ci-runner_01")
+    assert not is_standard_profile("ci-runner_01")
+
+    # Invalid profiles
+    assert not is_valid_profile_name("")
+    assert not is_valid_profile_name("dev env")
+    assert not is_valid_profile_name("prod@service")
+    assert not is_valid_profile_name("stage/01")
+
+    # Exception on invalid profile name
+    caught: bool = False
+    try:
+        validate_profile_name("invalid profile!")
+    except ConfigError as err:
+        if err.code == ERR_CONFIG_PARSE_ERROR:
+            caught = True
+    assert caught
+    print("PASS: test_profile_name_validation")
+
+def test_profile_filename_formatting() -> None:
+    # .env formatting
+    assert profile_filename(".env", "test") == ".env.test"
+    assert profile_filename("fixtures/.env", "prod") == "fixtures/.env.prod"
+
+    # config documents formatting
+    assert profile_filename("vault.toml", "staging") == "vault.staging.toml"
+    assert profile_filename("app.json", "test") == "app.test.json"
+    assert profile_filename("config.yaml", "production") == "config.production.yaml"
+    print("PASS: test_profile_filename_formatting")
+
+def test_profile_02_unknown_profile_rejection() -> None:
+    # Builder must reject unknown profile with safe error code (PROFILE-02)
+    caught: bool = False
+    try:
+        builder: ConfigBuilder = ConfigBuilder()
+        builder.with_profile("unknown_env_name")
+    except ConfigError as err:
+        if err.code == ERR_CONFIG_PARSE_ERROR:
+            caught = True
+    assert caught
+
+    # Custom profile succeeds when explicitly allowed
+    builder2: ConfigBuilder = ConfigBuilder()
+    builder2.allow_profile("custom_ci")
+    builder2.with_profile("custom_ci")
+    assert builder2.profile == "custom_ci"
+    print("PASS: test_profile_02_unknown_profile_rejection")
+
+def test_profile_overlay_precedence() -> None:
+    # Profile overlay: base file (3) < profile file (4) < .env (5) < .env.<profile> (6) < runtime override (9)
+    # Using memory sources to represent ranks and profile tags cleanly
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_profile("staging")
+
+    # Rank 2: Defaults
+    defs: dict[str, str] = {}
+    defs["APP_NAME"] = "App-Default"
+    defs["CLUSTER"] = "cluster-default"
+    builder.with_defaults(defs)
+
+    # Rank 3: Base config file
+    base_file: MemorySource = MemorySource("vault.toml", 3, "base", False)
+    base_file.set_string("APP_NAME", "App-Base")
+    base_file.set_string("LOG_LEVEL", "INFO")
+    builder.with_source(base_file)
+
+    # Rank 4: Profile config file (vault.staging.toml)
+    profile_file: MemorySource = MemorySource("vault.staging.toml", 4, "staging", False)
+    profile_file.set_string("APP_NAME", "App-Staging")
+    profile_file.set_string("CLUSTER", "cluster-staging")
+    builder.with_source(profile_file)
+
+    # Rank 5: Base .env
+    base_env: MemorySource = MemorySource(".env", 5, "base", False)
+    base_env.set_string("LOG_LEVEL", "DEBUG")
+    builder.with_source(base_env)
+
+    # Rank 6: Profile .env (.env.staging)
+    profile_env: MemorySource = MemorySource(".env.staging", 6, "staging", False)
+    profile_env.set_string("LOG_LEVEL", "WARN")
+    builder.with_source(profile_env)
+
+    # Rank 9: Runtime override
+    builder.with_override("APP_NAME", "App-Override")
+
+    snap: ConfigSnapshot = builder.build()
+
+    # APP_NAME: override (9) wins over staging file (4), base file (3), defaults (2)
+    assert snap.get_string("APP_NAME") == "App-Override"
+    # CLUSTER: profile file (4) wins over defaults (2)
+    assert snap.get_string("CLUSTER") == "cluster-staging"
+    # LOG_LEVEL: profile .env (6) wins over base .env (5) and base file (3)
+    assert snap.get_string("LOG_LEVEL") == "WARN"
+
+    # Safe explain verification
+    exp_log: str = snap.explain("LOG_LEVEL")
+    assert "profile=staging" in exp_log
+    assert "rank=6" in exp_log
+    print("PASS: test_profile_overlay_precedence")
+
+def test_profile_01_production_strict_checks() -> None:
+    # In production, secret cannot use default source (PROFILE-01)
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_ENV", True, True, "production", False, True)
+    schema.add_string("DB_SECRET", True, True, "hardcoded_dummy_pw", True, True)
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_profile("production")
+    builder.with_schema(schema)
+
+    # Secret with default source must fail in production
+    caught_default: bool = False
+    try:
+        builder.build()
+    except ConfigError as err:
+        if err.code == ERR_CONFIG_SECRET_SOURCE_DENIED:
+            caught_default = True
+    assert caught_default
+
+    # In development, the exact same schema with default secret succeeds!
+    dev_builder: ConfigBuilder = ConfigBuilder()
+    dev_builder.with_profile("development")
+    dev_builder.with_schema(schema)
+    dev_snap: ConfigSnapshot = dev_builder.build()
+    assert dev_snap.get_string("DB_SECRET") == "hardcoded_dummy_pw"
+
+    # In production with an explicit non-default secret supplied, it succeeds!
+    prod_builder: ConfigBuilder = ConfigBuilder()
+    prod_builder.with_profile("production")
+    prod_builder.with_schema(schema)
+    prod_builder.with_override("DB_SECRET", "super-strong-production-token")
+    prod_snap: ConfigSnapshot = prod_builder.build()
+    assert prod_snap.get_string("DB_SECRET") == "super-strong-production-token"
+    print("PASS: test_profile_01_production_strict_checks")
+
+# Run all test functions
+test_profile_name_validation()
+test_profile_filename_formatting()
+test_profile_02_unknown_profile_rejection()
+test_profile_overlay_precedence()
+test_profile_01_production_strict_checks()
+print("ALL PROFILES TESTS PASSED SUCCESSFULLY!")

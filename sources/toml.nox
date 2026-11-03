@@ -26,8 +26,12 @@ def _toml_to_config_value(tv: TomlValue) -> ConfigValue:
         return make_array(arr)
     if tv.kind == 5:
         obj: dict[str, ConfigValue] = {}
-        for k in tv.tbl:
+        tbl_keys: list[str] = tv.tbl.keys()
+        t_idx: int = 0
+        while t_idx < len(tbl_keys):
+            k: str = tbl_keys[t_idx]
             obj[k] = _toml_to_config_value(tv.tbl[k])
+            t_idx = t_idx + 1
         return make_object(obj)
     if tv.kind == 6:
         return make_string(tv.s)
@@ -61,7 +65,10 @@ class TomlSource(ConfigSource):
         if tv.kind != 5: # 5 = table
             raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root TOML document must be a table")
 
-        for k in tv.tbl:
+        tbl_keys2: list[str] = tv.tbl.keys()
+        t2_idx: int = 0
+        while t2_idx < len(tbl_keys2):
+            k: str = tbl_keys2[t2_idx]
             child_tv: TomlValue = tv.tbl[k]
             cv: ConfigValue = _toml_to_config_value(child_tv)
 
@@ -74,5 +81,6 @@ class TomlSource(ConfigSource):
             origin: SourceOrigin = SourceOrigin(self.path, "toml", self.profile, self.rank)
             entry: ConfigEntry = ConfigEntry(k, cv, presence, origin, False, False)
             entries.append(entry)
+            t2_idx = t2_idx + 1
 
         return entries

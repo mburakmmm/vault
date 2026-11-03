@@ -1,0 +1,52 @@
+# VAULT — Profile Overlays and Environment Layering
+# Module: profiles.overlay
+
+from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR
+import nox.strings
+
+STANDARD_PROFILES: list[str] = ["development", "test", "staging", "production"]
+
+def is_valid_profile_name(name: str) -> bool:
+    nlen: int = len(name)
+    if nlen == 0 or nlen > 64:
+        return False
+    idx: int = 0
+    while idx < nlen:
+        b: int = nox.strings.byte_at(name, idx)
+        is_alpha: bool = (b >= 65 and b <= 90) or (b >= 97 and b <= 122)
+        is_num: bool = b >= 48 and b <= 57
+        is_extra: bool = b == 95 or b == 45 # '_' or '-'
+        if not (is_alpha or is_num or is_extra):
+            return False
+        idx = idx + 1
+    return True
+
+def validate_profile_name(name: str) -> str:
+    cleaned: str = nox.strings.trim(name)
+    if not is_valid_profile_name(cleaned):
+        raise ConfigError(ERR_CONFIG_PARSE_ERROR, name, "invalid profile name format")
+    return cleaned
+
+def is_standard_profile(name: str) -> bool:
+    idx: int = 0
+    while idx < len(STANDARD_PROFILES):
+        if STANDARD_PROFILES[idx] == name:
+            return True
+        idx = idx + 1
+    if name == "dev" or name == "prod":
+        return True
+    return False
+
+def is_production_profile(profile: str) -> bool:
+    return nox.strings.eq_ignore_case(profile, "production") or nox.strings.eq_ignore_case(profile, "prod")
+
+def profile_filename(base_path: str, profile: str) -> str:
+    # e.g., ".env" -> ".env.prod", "vault.toml" -> "vault.prod.toml"
+    if nox.strings.ends_with(base_path, ".env"):
+        return base_path + "." + profile
+    dot_idx: int = nox.strings.index_of(base_path, ".")
+    if dot_idx >= 0:
+        prefix: str = base_path[0:dot_idx]
+        ext: str = base_path[dot_idx:len(base_path)]
+        return prefix + "." + profile + ext
+    return base_path + "." + profile

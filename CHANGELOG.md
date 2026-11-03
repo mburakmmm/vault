@@ -5,6 +5,25 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-03
+
+### Added
+- Multi-environment profile management (`profiles/overlay.nox`) supporting `development`, `test`, `staging`, `production`, and sanitized custom profiles.
+- Profile-aware file and `.env` resolution (`vault.<profile>.toml`, `.env.<profile>`).
+- Strict production profile checks (`PROFILE-01`) enforcing rejection of hardcoded/default secrets.
+- Unknown profile validation (`PROFILE-02`) preventing silent fallback to development.
+- Graph-based deterministic string interpolation engine (`interpolate/resolve.nox`) with `${KEY}` resolution.
+- Multi-hop reference chain resolution (`INTERP-01`, e.g. `A -> B -> C`).
+- Direct (`A -> A`) and indirect (`A -> B -> A`) cycle detection (`INTERP-02`) reporting safe `CONFIG_INTERPOLATION_CYCLE` error codes without leaking values.
+- Resource bounds protection (`INTERP-03`) with maximum 16 recursion hops and 128 KiB expansion limits.
+- Transitive secret taint propagation (`INTERP-04`) ensuring derived settings inherit `is_secret = true`.
+- Literal dollar escaping via `$$` and `${KEY:-default}` literal fallbacks.
+- Integrated profile loading and interpolation in `ConfigBuilder`.
+- Test suites:
+  - `tests/interpolation_test.nox` (INTERP-01, INTERP-02, INTERP-03, INTERP-04, escaping, defaults, missing refs).
+  - `tests/profiles_test.nox` (PROFILE-01, PROFILE-02, filename resolution, overlay precedence).
+- Verified 100% green across both LLVM (`zig 0.17.0`) and QBE compiler backends.
+
 ## [0.4.0] - 2026-11-03
 
 ### Added

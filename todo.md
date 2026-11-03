@@ -181,27 +181,27 @@
 
 ---
 
-### [ ] Sürüm v0.5.0 — Faz 5: Profiller, İnterpolasyon ve Sır Bulaşması (Taint)
+### [x] Sürüm v0.5.0 — Faz 5: Profiller, İnterpolasyon ve Sır Bulaşması (Taint)
 > **Hedef:** Çoklu ortam profillerini (`dev`, `test`, `prod`) katmanlamak, güvenli `${KEY}` referans çözümü ve sır yayılımını gerçekleştirmek.
 
-- [ ] **5.1 Profil Yönetimi (`profiles/overlay.nox`)**
-  - [ ] Açık profil seçimi (`development`, `test`, `staging`, `production`, özel adlar).
-  - [ ] Profil tabanlı dosya ve `.env` katmanlama (`vault.<profile>.toml`, `.env.<profile>`).
-  - [ ] Bilinmeyen profil için hata verme (`PROFILE-02`).
-  - [ ] `production` modunda sıkı güvenlik kontrolleri (`PROFILE-01`).
-- [ ] **5.2 Güvenli Değişken İnterpolasyonu (`interpolate/resolve.nox`)**
-  - [ ] Birleştirme sonrasında `${KEY}` sözdizimi çözümü.
-  - [ ] Döngü tespiti (Cycle detection) ve bağımlılık grafiği (`A -> B -> A`) (`INTERP-02`).
-  - [ ] Çok adımlı çözüm (`A -> B -> C`) (`INTERP-01`).
-  - [ ] Maksimum derinlik sınırı (16) ve maksimum genişleme boyutu (128 KiB) (`INTERP-03`).
-  - [ ] Kabuk komutu, harici kod çalıştırma veya keyfi fonksiyon çağrısı yasağının korunması.
-- [ ] **5.3 Sır Yayılımı (Secret Taint Propagation)**
-  - [ ] İnterpolasyonda sır içeren bir anahtar kullanıldığında hedef anahtarın da otomatik `secret=true` olması (`INTERP-04`).
-- [ ] **5.4 Testler (`tests/profiles_test.nox`, `tests/interpolation_test.nox`)**
-  - [ ] Zincirleme referans ve döngü testleri.
-  - [ ] Genişleme bombası (expansion bomb) koruma testleri.
-  - [ ] Sır lekeleme (taint) testleri.
-  - [ ] **Kabul Kapısı (Gate 5):** İnterpolasyon deterministik olmalı, döngüler güvenle yakalanmalı ve sırlar lekelenerek korunmalıdır.
+- [x] **5.1 Profil Yönetimi (`profiles/overlay.nox`)**
+  - [x] Açık profil seçimi (`development`, `test`, `staging`, `production`, özel adlar).
+  - [x] Profil tabanlı dosya ve `.env` katmanlama (`vault.<profile>.toml`, `.env.<profile>`).
+  - [x] Bilinmeyen profil için hata verme (`PROFILE-02`).
+  - [x] `production` modunda sıkı güvenlik kontrolleri (`PROFILE-01`).
+- [x] **5.2 Güvenli Değişken İnterpolasyonu (`interpolate/resolve.nox`)**
+  - [x] Birleştirme sonrasında `${KEY}` sözdizimi çözümü.
+  - [x] Döngü tespiti (Cycle detection) ve bağımlılık grafiği (`A -> B -> A`) (`INTERP-02`).
+  - [x] Çok adımlı çözüm (`A -> B -> C`) (`INTERP-01`).
+  - [x] Maksimum derinlik sınırı (16) ve maksimum genişleme boyutu (128 KiB) (`INTERP-03`).
+  - [x] Kabuk komutu, harici kod çalıştırma veya keyfi fonksiyon çağrısı yasağının korunması.
+- [x] **5.3 Sır Yayılımı (Secret Taint Propagation)**
+  - [x] İnterpolasyonda sır içeren bir anahtar kullanıldığında hedef anahtarın da otomatik `secret=true` olması (`INTERP-04`).
+- [x] **5.4 Testler (`tests/profiles_test.nox`, `tests/interpolation_test.nox`)**
+  - [x] Zincirleme referans ve döngü testleri.
+  - [x] Genişleme bombası (expansion bomb) koruma testleri.
+  - [x] Sır lekeleme (taint) testleri.
+  - [x] **Kabul Kapısı (Gate 5):** İnterpolasyon deterministik olmalı, döngüler güvenle yakalanmalı ve sırlar lekelenerek korunmalıdır. (LLVM ve QBE onaylı)
 
 ---
 

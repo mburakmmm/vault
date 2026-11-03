@@ -1,8 +1,8 @@
 # VAULT — Configuration Builder
 # Module: core.builder
 
-from core.types import ConfigEntry, ConfigValue, make_string
-from core.errors import ConfigError, ERR_CONFIG_MISSING
+from core.types import ConfigEntry, ConfigValue, PRESENCE_MISSING, PRESENCE_NULL, PRESENCE_EMPTY, make_string
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_EMPTY_NOT_ALLOWED
 from core.merge import merge_sources
 from core.snapshot import ConfigSnapshot
 from sources.interface import ConfigSource
@@ -12,8 +12,10 @@ from sources.toml import TomlSource
 from sources.yaml import YamlSource
 from env.source import DotenvSource
 from env.process import ProcessEnvSource
-from schema.fields import ConfigSchema
+from schema.fields import ConfigSchema, Field
 from schema.validate import validate_entries, ValidationReport, SafeConfigDiagnostic
+from profiles.overlay import validate_profile_name, is_production_profile, profile_filename
+from interpolate.resolve import resolve_interpolations
 
 class ConfigBuilder:
     sources: list[ConfigSource]
@@ -21,6 +23,8 @@ class ConfigBuilder:
     is_production: bool
     builder_version: str
     allowed_root: str
+    profile: str
+    allowed_profiles: list[str]
 
     def __init__(self: ConfigBuilder) -> None:
         self.sources = []
@@ -28,9 +32,32 @@ class ConfigBuilder:
         self.is_production = False
         self.builder_version = "v1"
         self.allowed_root = ""
+        self.profile = "development"
+        self.allowed_profiles = ["development", "dev", "test", "staging", "production", "prod"]
 
     def with_allowed_root(self: ConfigBuilder, root: str) -> ConfigBuilder:
         self.allowed_root = root
+        return self
+
+    def with_profile(self: ConfigBuilder, name: str) -> ConfigBuilder:
+        cleaned: str = validate_profile_name(name)
+        if len(self.allowed_profiles) > 0:
+            found: bool = False
+            idx: int = 0
+            while idx < len(self.allowed_profiles):
+                if self.allowed_profiles[idx] == cleaned:
+                    found = True
+                idx = idx + 1
+            if not found:
+                raise ConfigError(ERR_CONFIG_PARSE_ERROR, cleaned, "unknown profile: '" + cleaned + "' is not recognized")
+        self.profile = cleaned
+        if is_production_profile(cleaned):
+            self.is_production = True
+        return self
+
+    def allow_profile(self: ConfigBuilder, name: str) -> ConfigBuilder:
+        cleaned: str = validate_profile_name(name)
+        self.allowed_profiles.append(cleaned)
         return self
 
     def with_source(self: ConfigBuilder, src: ConfigSource) -> ConfigBuilder:
@@ -39,8 +66,12 @@ class ConfigBuilder:
 
     def with_defaults(self: ConfigBuilder, defaults: dict[str, str]) -> ConfigBuilder:
         ms: MemorySource = MemorySource("memory_defaults", 2, "base", True)
-        for k in defaults:
+        d_keys: list[str] = defaults.keys()
+        d_idx: int = 0
+        while d_idx < len(d_keys):
+            k: str = d_keys[d_idx]
             ms.set_string(k, defaults[k])
+            d_idx = d_idx + 1
         self.sources.append(ms)
         return self
 
@@ -68,8 +99,24 @@ class ConfigBuilder:
             return self.with_yaml_file(path, optional)
         return self
 
+    def with_profile_file(self: ConfigBuilder, base_path: str, format_name: str, optional: bool) -> ConfigBuilder:
+        p_path: str = profile_filename(base_path, self.profile)
+        if format_name == "json":
+            self.sources.append(JsonSource(p_path, self.allowed_root, optional, 4, self.profile))
+        elif format_name == "toml":
+            self.sources.append(TomlSource(p_path, self.allowed_root, optional, 4, self.profile))
+        elif format_name == "yaml" or format_name == "yml":
+            self.sources.append(YamlSource(p_path, self.allowed_root, optional, 4, self.profile))
+        return self
+
     def with_dotenv(self: ConfigBuilder, path: str, optional: bool) -> ConfigBuilder:
         ds: DotenvSource = DotenvSource(path, optional, 5, "base")
+        self.sources.append(ds)
+        return self
+
+    def with_profile_dotenv(self: ConfigBuilder, base_path: str, optional: bool) -> ConfigBuilder:
+        p_path: str = profile_filename(base_path, self.profile)
+        ds: DotenvSource = DotenvSource(p_path, optional, 6, self.profile)
         self.sources.append(ds)
         return self
 
@@ -93,15 +140,47 @@ class ConfigBuilder:
         return self
 
     def build(self: ConfigBuilder) -> ConfigSnapshot:
+        # Step 1: Merge sources deterministically
         merged: dict[str, ConfigEntry] = merge_sources(self.sources)
 
+        # Step 2: Mark schema-declared secrets before interpolation for taint propagation
         schema_opt: ConfigSchema | None = self.schema
         if schema_opt is not None:
-            report: ValidationReport = validate_entries(merged, schema_opt, self.is_production)
+            field_keys: list[str] = schema_opt.keys()
+            f_idx: int = 0
+            while f_idx < len(field_keys):
+                fk: str = field_keys[f_idx]
+                fld: Field = schema_opt.get_field(fk)
+                if fld.secret and fk in merged:
+                    merged[fk].is_secret = True
+                f_idx = f_idx + 1
+
+        # Step 3: Resolve interpolations (with cycle detection, depth limits, and taint propagation)
+        resolved: dict[str, ConfigEntry] = resolve_interpolations(merged)
+
+        # Step 4: Validate against schema
+        if schema_opt is not None:
+            report: ValidationReport = validate_entries(resolved, schema_opt, self.is_production)
             if not report.is_valid:
                 first_err: SafeConfigDiagnostic = report.diagnostics[0]
                 total_errors: int = report.error_count()
                 summary_msg: str = first_err.message + " (" + str(total_errors) + " total validation errors)"
                 raise ConfigError(first_err.code, first_err.key, summary_msg)
 
-        return ConfigSnapshot(merged, self.builder_version)
+        # Step 5: Production safety checks (PROFILE-01)
+        if self.is_production:
+            res_keys: list[str] = resolved.keys()
+            p_idx: int = 0
+            while p_idx < len(res_keys):
+                k: str = res_keys[p_idx]
+                ent: ConfigEntry = resolved[k]
+                if ent.is_secret:
+                    if ent.is_default:
+                        raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, k, "secret cannot use default value in production")
+                    if ent.presence == PRESENCE_MISSING or ent.presence == PRESENCE_NULL:
+                        raise ConfigError(ERR_CONFIG_MISSING, k, "required secret is missing in production")
+                    if ent.presence == PRESENCE_EMPTY:
+                        raise ConfigError(ERR_CONFIG_EMPTY_NOT_ALLOWED, k, "secret cannot be empty in production")
+                p_idx = p_idx + 1
+
+        return ConfigSnapshot(resolved, self.builder_version)

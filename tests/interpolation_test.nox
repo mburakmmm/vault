@@ -1,0 +1,187 @@
+# VAULT — Interpolation Engine Test Suite
+# Tests: INTERP-01, INTERP-02, INTERP-03, INTERP-04, escaping, defaults
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, PRESENCE_SUPPLIED, make_string
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_INTERPOLATION_CYCLE, ERR_CONFIG_SIZE_LIMIT, ERR_CONFIG_PARSE_ERROR
+from core.builder import ConfigBuilder
+from interpolate.resolve import resolve_interpolations, extract_template_references, substitute_template
+from schema.fields import ConfigSchema
+
+def make_test_entry(k: str, v: str, is_sec: bool) -> ConfigEntry:
+    org: SourceOrigin = SourceOrigin("test_src", "memory", "base", 5)
+    return ConfigEntry(k, make_string(v), PRESENCE_SUPPLIED, org, is_sec, False)
+
+def test_interp_01_multihop_chain() -> None:
+    # A -> B -> C
+    entries: dict[str, ConfigEntry] = {}
+    entries["ENV_NAME"] = make_test_entry("ENV_NAME", "production", False)
+    entries["HOST"] = make_test_entry("HOST", "db.${ENV_NAME}.internal", False)
+    entries["DATABASE_URL"] = make_test_entry("DATABASE_URL", "postgres://${HOST}:5432/app", False)
+
+    resolved: dict[str, ConfigEntry] = resolve_interpolations(entries)
+
+    assert resolved["ENV_NAME"].val.s == "production"
+    assert resolved["HOST"].val.s == "db.production.internal"
+    assert resolved["DATABASE_URL"].val.s == "postgres://db.production.internal:5432/app"
+    print("PASS: test_interp_01_multihop_chain")
+
+def test_interp_02_direct_cycle() -> None:
+    # A -> A
+    entries: dict[str, ConfigEntry] = {}
+    entries["LOOP"] = make_test_entry("LOOP", "prefix-${LOOP}", False)
+
+    caught: bool = False
+    try:
+        resolve_interpolations(entries)
+    except ConfigError as err:
+        if err.code == ERR_CONFIG_INTERPOLATION_CYCLE:
+            caught = True
+
+    assert caught
+    print("PASS: test_interp_02_direct_cycle")
+
+def test_interp_02_indirect_cycle() -> None:
+    # A -> B -> A
+    entries: dict[str, ConfigEntry] = {}
+    entries["A"] = make_test_entry("A", "ref-${B}", False)
+    entries["B"] = make_test_entry("B", "ref-${A}", False)
+
+    caught: bool = False
+    try:
+        resolve_interpolations(entries)
+    except ConfigError as err:
+        if err.code == ERR_CONFIG_INTERPOLATION_CYCLE:
+            caught = True
+
+    assert caught
+
+    # 3-hop cycle: X -> Y -> Z -> X
+    entries3: dict[str, ConfigEntry] = {}
+    entries3["X"] = make_test_entry("X", "ref-${Y}", False)
+    entries3["Y"] = make_test_entry("Y", "ref-${Z}", False)
+    entries3["Z"] = make_test_entry("Z", "ref-${X}", False)
+
+    caught3: bool = False
+    try:
+        resolve_interpolations(entries3)
+    except ConfigError as err:
+        if err.code == ERR_CONFIG_INTERPOLATION_CYCLE:
+            caught3 = True
+
+    assert caught3
+    print("PASS: test_interp_02_indirect_cycle")
+
+def test_interp_03_depth_limit() -> None:
+    # Depth exceeds 16 hops: K0 -> K1 -> ... -> K17
+    entries: dict[str, ConfigEntry] = {}
+    idx: int = 0
+    while idx <= 17:
+        if idx == 17:
+            entries["K" + str(idx)] = make_test_entry("K" + str(idx), "leaf", False)
+        else:
+            entries["K" + str(idx)] = make_test_entry("K" + str(idx), "${K" + str(idx + 1) + "}", False)
+        idx = idx + 1
+
+    caught: bool = False
+    try:
+        resolve_interpolations(entries)
+    except ConfigError as err:
+        if err.code == ERR_CONFIG_SIZE_LIMIT:
+            caught = True
+
+    assert caught
+    print("PASS: test_interp_03_depth_limit")
+
+def test_interp_03_expansion_size_limit() -> None:
+    # Expansion exceeds 128 KiB
+    entries: dict[str, ConfigEntry] = {}
+    # Build 1 KiB block
+    block: str = "0123456789abcdef" # 16 bytes
+    b_idx: int = 0
+    while b_idx < 6: # 16 * 2^6 = 1024 bytes
+        block = block + block
+        b_idx = b_idx + 1
+
+    entries["CHUNK"] = make_test_entry("CHUNK", block, False)
+    # Reference CHUNK repeatedly until over 128 KiB
+    big_template: str = ""
+    r_idx: int = 0
+    while r_idx < 130:
+        big_template = big_template + "${CHUNK}"
+        r_idx = r_idx + 1
+
+    entries["BOMB"] = make_test_entry("BOMB", big_template, False)
+
+    caught: bool = False
+    try:
+        resolve_interpolations(entries)
+    except ConfigError as err:
+        if err.code == ERR_CONFIG_SIZE_LIMIT:
+            caught = True
+
+    assert caught
+    print("PASS: test_interp_03_expansion_size_limit")
+
+def test_interp_04_secret_taint_propagation() -> None:
+    # Secret reference propagates is_secret=True to derived fields
+    entries: dict[str, ConfigEntry] = {}
+    entries["API_TOKEN"] = make_test_entry("API_TOKEN", "super-secret-12345", True)
+    entries["AUTH_HEADER"] = make_test_entry("AUTH_HEADER", "Bearer ${API_TOKEN}", False)
+    entries["CLIENT_CONF"] = make_test_entry("CLIENT_CONF", "header=${AUTH_HEADER}", False)
+    entries["PUBLIC_KEY"] = make_test_entry("PUBLIC_KEY", "unrelated-public-value", False)
+
+    resolved: dict[str, ConfigEntry] = resolve_interpolations(entries)
+
+    # API_TOKEN was originally secret
+    assert resolved["API_TOKEN"].is_secret
+    # AUTH_HEADER derived from API_TOKEN must be tainted secret
+    assert resolved["AUTH_HEADER"].is_secret
+    assert resolved["AUTH_HEADER"].val.s == "Bearer super-secret-12345"
+    # CLIENT_CONF derived from AUTH_HEADER must also be tainted secret (transitive)
+    assert resolved["CLIENT_CONF"].is_secret
+    assert resolved["CLIENT_CONF"].val.s == "header=Bearer super-secret-12345"
+    # PUBLIC_KEY did not reference any secret, must NOT be secret
+    assert not resolved["PUBLIC_KEY"].is_secret
+    print("PASS: test_interp_04_secret_taint_propagation")
+
+def test_escaping_and_fallbacks() -> None:
+    entries: dict[str, ConfigEntry] = {}
+    entries["PORT"] = make_test_entry("PORT", "8080", False)
+    # $$ escapes to single $
+    entries["ESCAPED_DOLLAR"] = make_test_entry("ESCAPED_DOLLAR", "price is $$100", False)
+    # $${PORT} escapes to literal ${PORT}
+    entries["ESCAPED_EXPR"] = make_test_entry("ESCAPED_EXPR", "$${PORT} -> ${PORT}", False)
+    # ${MISSING:-default_val}
+    entries["FALLBACK"] = make_test_entry("FALLBACK", "http://${MISSING_HOST:-localhost}:${PORT}", False)
+
+    resolved: dict[str, ConfigEntry] = resolve_interpolations(entries)
+
+    assert resolved["ESCAPED_DOLLAR"].val.s == "price is $100"
+    assert resolved["ESCAPED_EXPR"].val.s == "${PORT} -> 8080"
+    assert resolved["FALLBACK"].val.s == "http://localhost:8080"
+    print("PASS: test_escaping_and_fallbacks")
+
+def test_missing_reference_error() -> None:
+    entries: dict[str, ConfigEntry] = {}
+    entries["URL"] = make_test_entry("URL", "http://${UNSET_HOST}/api", False)
+
+    caught: bool = False
+    try:
+        resolve_interpolations(entries)
+    except ConfigError as err:
+        if err.code == ERR_CONFIG_MISSING:
+            caught = True
+
+    assert caught
+    print("PASS: test_missing_reference_error")
+
+# Run all test functions
+test_interp_01_multihop_chain()
+test_interp_02_direct_cycle()
+test_interp_02_indirect_cycle()
+test_interp_03_depth_limit()
+test_interp_03_expansion_size_limit()
+test_interp_04_secret_taint_propagation()
+test_escaping_and_fallbacks()
+test_missing_reference_error()
+print("ALL INTERPOLATION TESTS PASSED SUCCESSFULLY!")
