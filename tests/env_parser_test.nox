@@ -1,0 +1,215 @@
+# Test suite for Pure .env Parser
+# Regression scenarios covered: ENV-03, ENV-04, ENV-05, ENV-06, ENV-07, ENV-08
+
+from nox.test import assert_eq_str, assert_eq_int, assert_true
+from env.parser import parse_dotenv, EnvEntry, EnvParseError
+from nox.fs import read_to_string
+import nox.strings
+
+# -------------------------------------------------------------------------
+# Test 1: Basic Valid .env Parsing
+# -------------------------------------------------------------------------
+valid_src: str = read_to_string("fixtures/dotenv/valid.env")
+entries: list[EnvEntry] = parse_dotenv(valid_src)
+
+# Check count (11 entries in valid.env)
+assert_eq_int(len(entries), 11, "expected 11 valid entries")
+
+# Check values
+e0: EnvEntry = entries[0]
+assert_eq_str(e0.key, "APP_NAME", "key 0 mismatch")
+assert_eq_str(e0.value, "VaultDemo", "val 0 mismatch")
+
+e1: EnvEntry = entries[1]
+assert_eq_str(e1.key, "APP_ENV", "key 1 mismatch")
+assert_eq_str(e1.value, "production", "val 1 mismatch")
+
+e2: EnvEntry = entries[2]
+assert_eq_str(e2.key, "PORT", "key 2 mismatch")
+assert_eq_str(e2.value, "8080", "val 2 mismatch")
+
+# export prefix
+e3: EnvEntry = entries[3]
+assert_eq_str(e3.key, "LOG_LEVEL", "key 3 mismatch")
+assert_eq_str(e3.value, "debug", "val 3 mismatch")
+
+# empty values
+e4: EnvEntry = entries[4]
+assert_eq_str(e4.key, "EMPTY_VAL", "empty unquoted key mismatch")
+assert_eq_str(e4.value, "", "empty unquoted val mismatch")
+
+e5: EnvEntry = entries[5]
+assert_eq_str(e5.key, "EMPTY_QUOTED", "empty double quoted key mismatch")
+assert_eq_str(e5.value, "", "empty double quoted val mismatch")
+assert_true(e5.is_quoted, "empty double quoted should be marked quoted")
+
+e6: EnvEntry = entries[6]
+assert_eq_str(e6.key, "EMPTY_SINGLE", "empty single quoted key mismatch")
+assert_eq_str(e6.value, "", "empty single quoted val mismatch")
+
+# URL unquoted with # (ENV-03)
+e7: EnvEntry = entries[7]
+assert_eq_str(e7.key, "URL", "url key mismatch")
+assert_eq_str(e7.value, "https://example.com/test?a=1#frag", "url unquoted hash mismatch")
+
+# URL double-quoted with # (ENV-03)
+e8: EnvEntry = entries[8]
+assert_eq_str(e8.key, "URL_QUOTED", "url quoted key mismatch")
+assert_eq_str(e8.value, "https://example.com/test?a=1#frag", "url quoted hash mismatch")
+
+# Inline comment
+e9: EnvEntry = entries[9]
+assert_eq_str(e9.key, "INLINE_COMMENT", "inline comment key mismatch")
+assert_eq_str(e9.value, "hello_world", "inline comment val mismatch")
+
+# Spaced value trimmed
+e10: EnvEntry = entries[10]
+assert_eq_str(e10.key, "SPACED_VALUE", "spaced key mismatch")
+assert_eq_str(e10.value, "trimmed value", "spaced val mismatch")
+
+# -------------------------------------------------------------------------
+# Test 2: Quotes and Escapes Fixture
+# -------------------------------------------------------------------------
+quotes_src: str = read_to_string("fixtures/dotenv/quotes.env")
+q_entries: list[EnvEntry] = parse_dotenv(quotes_src)
+assert_eq_int(len(q_entries), 4, "expected 4 quote entries")
+
+qe0: EnvEntry = q_entries[0]
+assert_eq_str(qe0.key, "SINGLE_LITERAL", "single literal key")
+assert_eq_str(qe0.value, "literal # with hash and \"quotes\" and \\n backslash", "single literal value")
+
+qe1: EnvEntry = q_entries[1]
+assert_eq_str(qe1.key, "DOUBLE_ESCAPED", "double escaped key")
+expected_escaped: str = "line1\nline2\ttab\\slash\"quote"
+assert_eq_str(qe1.value, expected_escaped, "double escaped value")
+
+qe2: EnvEntry = q_entries[2]
+assert_eq_str(qe2.key, "DOUBLE_WITH_COMMENT", "double comment key")
+assert_eq_str(qe2.value, "valid string", "double comment value")
+
+# -------------------------------------------------------------------------
+# Test 3: UTF-8 BOM and CRLF Normalization (ENV-07)
+# -------------------------------------------------------------------------
+bom: str = nox.strings.char_from_byte(239) + nox.strings.char_from_byte(187) + nox.strings.char_from_byte(191)
+cr: str = nox.strings.char_from_byte(13)
+crlf_input: str = bom + "FOO=BAR" + cr + "\nBAZ=QUX" + cr + "\n"
+crlf_entries: list[EnvEntry] = parse_dotenv(crlf_input)
+assert_eq_int(len(crlf_entries), 2, "expected 2 entries from crlf+bom")
+assert_eq_str(crlf_entries[0].key, "FOO", "crlf FOO key")
+assert_eq_str(crlf_entries[0].value, "BAR", "crlf FOO value")
+assert_eq_str(crlf_entries[1].key, "BAZ", "crlf BAZ key")
+assert_eq_str(crlf_entries[1].value, "QUX", "crlf BAZ value")
+
+# -------------------------------------------------------------------------
+# Test 4: Trailing Newlines Do Not Produce Phantom Keys
+# -------------------------------------------------------------------------
+trailing_input: str = "KEY1=V1\n\n\nKEY2=V2\n\n"
+tr_entries: list[EnvEntry] = parse_dotenv(trailing_input)
+assert_eq_int(len(tr_entries), 2, "trailing newlines phantom key check")
+
+# -------------------------------------------------------------------------
+# Test 5: Duplicate Key Rejection (ENV-04)
+# -------------------------------------------------------------------------
+dup_input: str = "API_KEY=first\nAPI_KEY=second\n"
+dup_caught: bool = False
+dup_code: str = ""
+dup_key: str = ""
+try:
+    parse_dotenv(dup_input)
+except EnvParseError as e:
+    dup_caught = True
+    dup_code = e.code
+    dup_key = e.key
+except Exception:
+    pass
+
+assert_true(dup_caught, "duplicate key must raise EnvParseError")
+assert_eq_str(dup_code, "CONFIG_DUPLICATE_KEY", "duplicate key error code")
+assert_eq_str(dup_key, "API_KEY", "duplicate key name")
+
+# -------------------------------------------------------------------------
+# Test 6: Missing '=' Delimiter Rejection (ENV-06)
+# -------------------------------------------------------------------------
+no_eq_caught: bool = False
+no_eq_code: str = ""
+try:
+    parse_dotenv("INVALID_LINE_WITHOUT_EQUALS\n")
+except EnvParseError as e:
+    no_eq_caught = True
+    no_eq_code = e.code
+except Exception:
+    pass
+
+assert_true(no_eq_caught, "missing equals must raise EnvParseError")
+assert_eq_str(no_eq_code, "CONFIG_PARSE_ERROR", "missing equals code")
+
+# -------------------------------------------------------------------------
+# Test 7: Unclosed Quotes & Malformed Escapes (ENV-06)
+# -------------------------------------------------------------------------
+unclosed_caught: bool = False
+try:
+    parse_dotenv("SECRET_TOKEN=\"unclosed_double_quote\n")
+except EnvParseError as e:
+    unclosed_caught = True
+    assert_eq_str(e.code, "CONFIG_PARSE_ERROR", "unclosed quote code")
+    assert_eq_str(e.key, "SECRET_TOKEN", "unclosed quote key")
+    # Verify SECRET VALUE IS NOT in error message!
+    assert_true(not nox.strings.contains(e.message, "unclosed_double_quote"), "error message must not leak value")
+except Exception:
+    pass
+
+assert_true(unclosed_caught, "unclosed quote must raise")
+
+# -------------------------------------------------------------------------
+# Test 8: Invalid Key Grammar
+# -------------------------------------------------------------------------
+bad_key_caught: bool = False
+try:
+    parse_dotenv("123INVALID=value\n")
+except EnvParseError as e:
+    bad_key_caught = True
+    assert_eq_str(e.code, "CONFIG_PARSE_ERROR", "bad key code")
+except Exception:
+    pass
+
+assert_true(bad_key_caught, "invalid key start must raise")
+
+# -------------------------------------------------------------------------
+# Test 9: Forbidden NUL Escape Sequence in Quoted String
+# -------------------------------------------------------------------------
+nul_caught: bool = False
+try:
+    parse_dotenv("KEY=\"val\\0ue\"\n")
+except EnvParseError as e:
+    nul_caught = True
+    assert_eq_str(e.code, "CONFIG_PARSE_ERROR", "nul escape code")
+except Exception:
+    pass
+
+assert_true(nul_caught, "forbidden escape \\0 must raise CONFIG_PARSE_ERROR")
+
+# -------------------------------------------------------------------------
+# Test 10: Size Limits (ENV-08)
+# -------------------------------------------------------------------------
+# Key length limit (> 128 bytes)
+long_key: str = nox.strings.repeat("A", 130) + "=val\n"
+long_key_caught: bool = False
+try:
+    parse_dotenv(long_key)
+except EnvParseError as e:
+    long_key_caught = True
+    assert_eq_str(e.code, "CONFIG_SIZE_LIMIT", "long key code")
+except Exception:
+    pass
+
+assert_true(long_key_caught, "key > 128 bytes must raise CONFIG_SIZE_LIMIT")
+
+# -------------------------------------------------------------------------
+# Test 11: Literal $(cmd) Is Treated as Literal Data (ENV-05)
+# -------------------------------------------------------------------------
+cmd_input: str = "SAFE_VAL=\"$(rm -rf /)\"\n"
+cmd_entries: list[EnvEntry] = parse_dotenv(cmd_input)
+assert_eq_int(len(cmd_entries), 1, "cmd input parsed")
+assert_eq_str(cmd_entries[0].value, "$(rm -rf /)", "command substitution preserved literally without execution")
+
+print("ENV_PARSER_TEST: ALL PASS")

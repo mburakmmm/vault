@@ -23,7 +23,7 @@
 | Sürüm | Faz | Kapsam | Aşama Durumu |
 | :--- | :--- | :--- | :--- |
 | **v0.1.0** | **Faz 0** | Yetenek Denetimi (Capability Audit), NOX Probları ve İskelet Paket | [x] Tamamlandı |
-| **v0.2.0** | **Faz 1** | Saf (Pure) & Bounded `.env` Ayrıştırıcı (Parser & Tokenizer) | [ ] Beklemede |
+| **v0.2.0** | **Faz 1** | Saf (Pure) & Bounded `.env` Ayrıştırıcı (Parser & Tokenizer) | [x] Tamamlandı |
 | **v0.2.5** | **Faz 2** | Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik | [ ] Beklemede |
 | **v0.3.0** | **Faz 3** | Tipli Şema (Typed Schema) & Toplu Güvenli Doğrulama (**MVP Sürümü**) | [ ] Beklemede |
 | **v0.4.0** | **Faz 4** | Yapılandırılmış Kaynaklar (JSON, TOML, YAML Köprüleri) & Kök Korumalı Dosyalar | [ ] Beklemede |
@@ -67,34 +67,34 @@
 
 ---
 
-### [ ] Sürüm v0.2.0 — Faz 1: Saf (Pure) & Bounded `.env` Ayrıştırıcı
+### [x] Sürüm v0.2.0 — Faz 1: Saf (Pure) & Bounded `.env` Ayrıştırıcı
 > **Hedef:** Hiçbir I/O yapmayan, doğrudan metin alan, güvenlik sınırlarına ve katı kurallara uyan `.env` parser'ı tamamlamak.
 
-- [ ] **1.1 Parser Çekirdeği (`env/parser.nox`)**
-  - [ ] Token ve AST/Satır modellerini tanımla (`EnvEntry`, `EnvParseError`).
-  - [ ] Değişken adı dilbilgisi denetimi (`^[A-Za-z_][A-Za-z0-9_]*$`).
-  - [ ] `KEY=VALUE`, eşittir etrafındaki opsiyonel boşluklar, boş değerler (`KEY=`).
-  - [ ] `export KEY=VALUE` sözdizimini tanı (işletim sistemine aktarmadan güvenle ayrıştır).
-  - [ ] Tek tırnak (`'...'`) ve çift tırnak (`"..."`) desteği.
-  - [ ] Kaçış dizileri (Escape sequences): `\n`, `\r`, `\t`, `\\`, `\"` (katı politika ile).
-  - [ ] Yorum satırları (`#`) ve tırnak içi/satır içi yorum ayrımı.
-  - [ ] UTF-8 BOM ve CRLF/LF normalizasyonu.
-- [ ] **1.2 Güvenlik Sınırları & Korumalar**
-  - [ ] Maksimum dosya boyutu sınırı (1 MiB).
-  - [ ] Maksimum anahtar sayısı (2.000 anahtar).
-  - [ ] Maksimum tekil değer boyutu (64 KiB).
-  - [ ] Maksimum anahtar uzunluğu (128 bayt).
-  - [ ] Çift anahtar (Duplicate key) katı hata politikası (`CONFIG_DUPLICATE_KEY`).
-  - [ ] Hata mesajlarında asla sır değeri içermeme, sadece satır/sütun/anahtar adı bildirme.
-  - [ ] `$(...)`, backtick veya kabuk komutlarını kesinlikle çalıştırmama (hata ver veya literal al).
-- [ ] **1.3 Testler ve Fikstürler (`tests/env_parser_test.nox`)**
-  - [ ] Pozitif sözdizimi testleri (`fixtures/dotenv/valid.env`).
-  - [ ] Tırnak, escape ve yorum testleri (`fixtures/dotenv/quotes.env`).
-  - [ ] Geçersiz anahtar, bozuk tırnak, NUL baytı testleri (`fixtures/dotenv/malformed.env`).
-  - [ ] Çift anahtar çakışma testleri.
-  - [ ] Aşırı boyutlu (size bomb) girdi testleri.
-  - [ ] Regresyon senaryoları: `ENV-03`, `ENV-04`, `ENV-05`, `ENV-06`, `ENV-07`, `ENV-08`.
-  - [ ] **Kabul Kapısı (Gate 1):** Tüm parser testleri `noxc test` ile yeşil olmalı, hiçbir ortam değişkeni mutasyona uğramamalıdır.
+- [x] **1.1 Parser Çekirdeği (`env/parser.nox`)**
+  - [x] Token ve AST/Satır modellerini tanımla (`EnvEntry`, `EnvParseError`).
+  - [x] Değişken adı dilbilgisi denetimi (`^[A-Za-z_][A-Za-z0-9_]*$`).
+  - [x] `KEY=VALUE`, eşittir etrafındaki opsiyonel boşluklar, boş değerler (`KEY=`).
+  - [x] `export KEY=VALUE` sözdizimini tanı (işletim sistemine aktarmadan güvenle ayrıştır).
+  - [x] Tek tırnak (`'...'`) ve çift tırnak (`"..."`) desteği.
+  - [x] Kaçış dizileri (Escape sequences): `\n`, `\r`, `\t`, `\\`, `\"` (katı politika ile).
+  - [x] Yorum satırları (`#`) ve tırnak içi/satır içi yorum ayrımı.
+  - [x] UTF-8 BOM ve CRLF/LF normalizasyonu.
+- [x] **1.2 Güvenlik Sınırları & Korumalar**
+  - [x] Maksimum dosya boyutu sınırı (1 MiB).
+  - [x] Maksimum anahtar sayısı (2.000 anahtar).
+  - [x] Maksimum tekil değer boyutu (64 KiB).
+  - [x] Maksimum anahtar uzunluğu (128 bayt).
+  - [x] Çift anahtar (Duplicate key) katı hata politikası (`CONFIG_DUPLICATE_KEY`).
+  - [x] Hata mesajlarında asla sır değeri içermeme, sadece satır/sütun/anahtar adı bildirme.
+  - [x] `$(...)`, backtick veya kabuk komutlarını kesinlikle çalıştırmama (hata ver veya literal al).
+- [x] **1.3 Testler ve Fikstürler (`tests/env_parser_test.nox`)**
+  - [x] Pozitif sözdizimi testleri (`fixtures/dotenv/valid.env`).
+  - [x] Tırnak, escape ve yorum testleri (`fixtures/dotenv/quotes.env`).
+  - [x] Geçersiz anahtar, bozuk tırnak, NUL baytı testleri (`fixtures/dotenv/malformed.env`).
+  - [x] Çift anahtar çakışma testleri.
+  - [x] Aşırı boyutlu (size bomb) girdi testleri.
+  - [x] Regresyon senaryoları: `ENV-03`, `ENV-04`, `ENV-05`, `ENV-06`, `ENV-07`, `ENV-08`.
+  - [x] **Kabul Kapısı (Gate 1):** Tüm parser testleri `noxc test` ile yeşil olmalı, hiçbir ortam değişkeni mutasyona uğramamalıdır.
 
 ---
 

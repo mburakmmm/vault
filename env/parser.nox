@@ -1,0 +1,256 @@
+# VAULT — Pure, Bounded .env Parser
+# Module: env.parser
+
+import nox.strings
+
+# Limits as defined in AGENTS.md
+MAX_FILE_SIZE: int = 1048576       # 1 MiB
+MAX_KEYS: int = 2000               # 2,000 keys
+MAX_VALUE_SIZE: int = 65536        # 64 KiB
+MAX_KEY_LENGTH: int = 128          # 128 bytes
+
+class EnvParseError(Exception):
+    code: str
+    line: int
+    column: int
+    key: str
+    message: str
+
+    def __init__(self: EnvParseError, code: str, line: int, column: int, key: str, msg: str) -> None:
+        self.code = code
+        self.line = line
+        self.column = column
+        self.key = key
+        self.message = msg
+
+    def to_string(self: EnvParseError) -> str:
+        return self.code + " at line " + str(self.line) + ", col " + str(self.column) + " (key: '" + self.key + "'): " + self.message
+
+class EnvEntry:
+    key: str
+    value: str
+    line: int
+    is_quoted: bool
+
+    def __init__(self: EnvEntry, key: str, value: str, line: int, is_quoted: bool) -> None:
+        self.key = key
+        self.value = value
+        self.line = line
+        self.is_quoted = is_quoted
+
+def _is_whitespace(b: int) -> bool:
+    return b == 32 or b == 9
+
+def _is_valid_key_start(b: int) -> bool:
+    # A-Z (65-90), a-z (97-122), _ (95)
+    if b >= 65 and b <= 90:
+        return True
+    if b >= 97 and b <= 122:
+        return True
+    return b == 95
+
+def _is_valid_key_char(b: int) -> bool:
+    # A-Z (65-90), a-z (97-122), 0-9 (48-57), _ (95)
+    if b >= 65 and b <= 90:
+        return True
+    if b >= 97 and b <= 122:
+        return True
+    if b >= 48 and b <= 57:
+        return True
+    return b == 95
+
+def _validate_key_grammar(key: str, line_num: int) -> None:
+    klen: int = nox.strings.byte_len(key)
+    if klen == 0:
+        raise EnvParseError("CONFIG_PARSE_ERROR", line_num, 1, "", "empty key name")
+    if klen > MAX_KEY_LENGTH:
+        raise EnvParseError("CONFIG_SIZE_LIMIT", line_num, 1, key, "key length exceeds 128 bytes limit")
+    
+    first_b: int = nox.strings.byte_at(key, 0)
+    if not _is_valid_key_start(first_b):
+        raise EnvParseError("CONFIG_PARSE_ERROR", line_num, 1, key, "invalid key start character")
+    
+    idx: int = 1
+    while idx < klen:
+        b: int = nox.strings.byte_at(key, idx)
+        if not _is_valid_key_char(b):
+            raise EnvParseError("CONFIG_PARSE_ERROR", line_num, idx + 1, key, "invalid character in key name")
+        idx = idx + 1
+
+def parse_dotenv(text: str) -> list[EnvEntry]:
+    # 1. Total input size bound check (1 MiB)
+    total_len: int = nox.strings.byte_len(text)
+    if total_len > MAX_FILE_SIZE:
+        raise EnvParseError("CONFIG_SIZE_LIMIT", 1, 1, "", "input size exceeds 1 MiB limit")
+    
+    # 2. Reject embedded NUL byte (scanned by raw byte value to avoid C-string terminator issues)
+    scan_idx: int = 0
+    has_null: bool = False
+    while scan_idx < total_len and not has_null:
+        if nox.strings.byte_at(text, scan_idx) == 0:
+            has_null = True
+        scan_idx = scan_idx + 1
+
+    if has_null:
+        raise EnvParseError("CONFIG_PARSE_ERROR", 1, 1, "", "input contains forbidden null byte")
+
+    # 3. Strip UTF-8 BOM if present at the start (0xEF, 0xBB, 0xBF is 1 codepoint U+FEFF)
+    s: str = text
+    if nox.strings.byte_len(s) >= 3:
+        if nox.strings.byte_at(s, 0) == 239 and nox.strings.byte_at(s, 1) == 187 and nox.strings.byte_at(s, 2) == 191:
+            s = s[1:len(s)]
+
+    # 4. Normalize CRLF: strip CR (byte 13)
+    cr_char: str = nox.strings.char_from_byte(13)
+    s = nox.strings.replace(s, cr_char, "")
+
+    # 5. Split into lines
+    lines: list[str] = nox.strings.split(s, "\n")
+    entries: list[EnvEntry] = []
+    seen_keys: dict[str, bool] = {}
+    key_count: int = 0
+
+    line_idx: int = 0
+    while line_idx < len(lines):
+        raw_line: str = lines[line_idx]
+        line_num: int = line_idx + 1
+        trimmed_line: str = nox.strings.trim(raw_line)
+
+        # Skip empty lines and full-line comments
+        if len(trimmed_line) == 0:
+            line_idx = line_idx + 1
+        elif nox.strings.byte_at(trimmed_line, 0) == 35: # '#'
+            line_idx = line_idx + 1
+        else:
+            # Handle optional 'export ' prefix
+            content: str = trimmed_line
+            if nox.strings.starts_with(content, "export ") or nox.strings.starts_with(content, "export\t"):
+                content = nox.strings.trim(content[6:len(content)])
+
+            # Find equals sign delimiter '=' (byte 61)
+            eq_idx: int = nox.strings.index_of(content, "=")
+            if eq_idx < 0:
+                raise EnvParseError("CONFIG_PARSE_ERROR", line_num, 1, "", "missing '=' delimiter in assignment")
+
+            # Extract and validate key part
+            raw_key: str = nox.strings.trim(content[0:eq_idx])
+            _validate_key_grammar(raw_key, line_num)
+
+            # Duplicate key check
+            if raw_key in seen_keys:
+                raise EnvParseError("CONFIG_DUPLICATE_KEY", line_num, 1, raw_key, "duplicate key assignment")
+            seen_keys[raw_key] = True
+
+            # Extract raw value part
+            raw_val_part: str = content[eq_idx + 1:len(content)]
+            val_trimmed: str = nox.strings.trim_start(raw_val_part)
+
+            val_res: str = ""
+            is_quoted: bool = False
+
+            if len(val_trimmed) == 0:
+                # Explicit empty value
+                val_res = ""
+            elif nox.strings.byte_at(val_trimmed, 0) == 39: # Single quote "'"
+                is_quoted = True
+                val_len: int = len(val_trimmed)
+                curr_idx: int = 1
+                closed: bool = False
+                val_buf: str = ""
+                while curr_idx < val_len and not closed:
+                    b: int = nox.strings.byte_at(val_trimmed, curr_idx)
+                    if b == 39: # Closing single quote
+                        closed = True
+                    else:
+                        val_buf = val_buf + nox.strings.char_from_byte(b)
+                    curr_idx = curr_idx + 1
+                
+                if not closed:
+                    raise EnvParseError("CONFIG_PARSE_ERROR", line_num, 1, raw_key, "unclosed single quote")
+                
+                # Check trailing characters after closing quote
+                trailing: str = nox.strings.trim(val_trimmed[curr_idx:val_len])
+                if len(trailing) > 0:
+                    if nox.strings.byte_at(trailing, 0) != 35: # '#'
+                        raise EnvParseError("CONFIG_PARSE_ERROR", line_num, curr_idx + 1, raw_key, "unexpected trailing characters after single-quoted value")
+                val_res = val_buf
+
+            elif nox.strings.byte_at(val_trimmed, 0) == 34: # Double quote '"'
+                is_quoted = True
+                val_len: int = len(val_trimmed)
+                curr_idx: int = 1
+                closed: bool = False
+                val_buf: str = ""
+                while curr_idx < val_len and not closed:
+                    b: int = nox.strings.byte_at(val_trimmed, curr_idx)
+                    if b == 92: # Backslash '\' escape
+                        if curr_idx + 1 >= val_len:
+                            raise EnvParseError("CONFIG_PARSE_ERROR", line_num, curr_idx + 1, raw_key, "unclosed escape sequence at end of line")
+                        esc_b: int = nox.strings.byte_at(val_trimmed, curr_idx + 1)
+                        if esc_b == 110: # \n
+                            val_buf = val_buf + "\n"
+                        elif esc_b == 116: # \t
+                            val_buf = val_buf + "\t"
+                        elif esc_b == 114: # \r
+                            val_buf = val_buf + nox.strings.char_from_byte(13)
+                        elif esc_b == 92: # \\
+                            val_buf = val_buf + "\\"
+                        elif esc_b == 34: # \"
+                            val_buf = val_buf + "\""
+                        else:
+                            raise EnvParseError("CONFIG_PARSE_ERROR", line_num, curr_idx + 1, raw_key, "unsupported escape sequence")
+                        curr_idx = curr_idx + 2
+                    elif b == 34: # Closing double quote
+                        closed = True
+                        curr_idx = curr_idx + 1
+                    else:
+                        val_buf = val_buf + nox.strings.char_from_byte(b)
+                        curr_idx = curr_idx + 1
+                
+                if not closed:
+                    raise EnvParseError("CONFIG_PARSE_ERROR", line_num, 1, raw_key, "unclosed double quote")
+                
+                # Check trailing characters after closing quote
+                trailing: str = nox.strings.trim(val_trimmed[curr_idx:val_len])
+                if len(trailing) > 0:
+                    if nox.strings.byte_at(trailing, 0) != 35: # '#'
+                        raise EnvParseError("CONFIG_PARSE_ERROR", line_num, curr_idx + 1, raw_key, "unexpected trailing characters after double-quoted value")
+                val_res = val_buf
+
+            else:
+                # Unquoted value: check for inline comments starting with '#' preceded by whitespace
+                val_len: int = len(val_trimmed)
+                curr_idx: int = 0
+                end_pos: int = val_len
+                comment_found: bool = False
+
+                while curr_idx < val_len and not comment_found:
+                    b: int = nox.strings.byte_at(val_trimmed, curr_idx)
+                    if b == 35: # '#'
+                        if curr_idx == 0:
+                            end_pos = 0
+                            comment_found = True
+                        else:
+                            prev_b: int = nox.strings.byte_at(val_trimmed, curr_idx - 1)
+                            if _is_whitespace(prev_b):
+                                end_pos = curr_idx - 1
+                                comment_found = True
+                    curr_idx = curr_idx + 1
+                
+                val_res = nox.strings.trim_end(val_trimmed[0:end_pos])
+
+            # Check value size limit (64 KiB)
+            if nox.strings.byte_len(val_res) > MAX_VALUE_SIZE:
+                raise EnvParseError("CONFIG_SIZE_LIMIT", line_num, 1, raw_key, "value size exceeds 64 KiB limit")
+
+            # Check total key count limit
+            key_count = key_count + 1
+            if key_count > MAX_KEYS:
+                raise EnvParseError("CONFIG_SIZE_LIMIT", line_num, 1, raw_key, "exceeded 2000 keys limit")
+
+            entry: EnvEntry = EnvEntry(raw_key, val_res, line_num, is_quoted)
+            entries.append(entry)
+
+            line_idx = line_idx + 1
+
+    return entries
