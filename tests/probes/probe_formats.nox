@@ -1,0 +1,40 @@
+# Probe 7: JSON, TOML, and YAML parsing and traversal
+import nox.json
+from nox.toml import TomlValue
+from nox.yaml import YamlValue
+import nox.toml
+import nox.yaml
+
+# 1. Test JSON
+json_src: str = "{\"name\": \"vault\", \"port\": 8080, \"enabled\": true}"
+jv: JsonValue = nox.json.parse(json_src)
+j_is_obj: bool = nox.json.is_object(jv)
+j_name: str = ""
+i: int = 0
+while i < nox.json.object_len(jv):
+    if nox.json.object_key(jv, i) == "name":
+        j_name = nox.json.as_string(nox.json.object_value(jv, i))
+    i = i + 1
+
+# 2. Test TOML
+toml_src: str = "app = \"vault\"\nport = 8080\nenabled = true\n"
+tv: TomlValue = nox.toml.parse(toml_src)
+t_is_table: bool = nox.toml.is_table(tv)
+t_val: TomlValue = tv.tbl["app"]
+t_app: str = t_val.s
+
+# 3. Test YAML
+yaml_src: str = "app: vault\nport: 8080\nenabled: true\n"
+yv: YamlValue = nox.yaml.parse(yaml_src)
+y_is_map: bool = nox.yaml.is_mapping(yv)
+y_val: YamlValue = yv.mapping["app"]
+y_app: str = y_val.s
+
+if not j_is_obj or j_name != "vault":
+    print("FAIL: json parse")
+elif not t_is_table or t_app != "vault":
+    print("FAIL: toml parse")
+elif not y_is_map or y_app != "vault":
+    print("FAIL: yaml parse")
+else:
+    print("PROBE_FORMATS: OK")

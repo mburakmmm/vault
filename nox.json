@@ -1,0 +1,6 @@
+{
+  "name": "vault",
+  "version": "0.1.0",
+  "entry": "vault.nox",
+  "dependencies": {}
+}

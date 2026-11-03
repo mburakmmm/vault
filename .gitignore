@@ -1,0 +1,21 @@
+# Compiled binaries and object files
+*.exe
+*.o
+*.obj
+*.pdb
+*.ilk
+
+# NOX compiler artifacts and build cache
+.nox/
+build/
+dist/
+
+# Real environment files (never commit real secrets)
+.env
+.env.*
+!.env.example
+
+# Temporary test outputs
+tmp/
+temp/
+*.log

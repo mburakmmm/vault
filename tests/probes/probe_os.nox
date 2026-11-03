@@ -1,0 +1,27 @@
+# Probe 5: nox.os.getenv absence behavior and set_var
+from nox.os import getenv, set_var, OsError
+
+absent_raised: bool = False
+try:
+    val: str = getenv("VAULT_DEFINITELY_ABSENT_KEY_XYZ_123")
+except OsError:
+    absent_raised = True
+except Exception:
+    pass
+
+test_key: str = "VAULT_PROBE_TEST_KEY_456"
+test_val: str = "probe_value_789"
+set_var(test_key, test_val)
+
+read_back: str = ""
+try:
+    read_back = getenv(test_key)
+except OsError:
+    pass
+
+if not absent_raised:
+    print("FAIL: getenv did not raise OsError on absent key")
+elif read_back != test_val:
+    print("FAIL: getenv returned unexpected value: " + read_back)
+else:
+    print("PROBE_OS: OK")

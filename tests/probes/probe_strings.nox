@@ -1,0 +1,33 @@
+# Probe 8: String slicing, UTF-8 BOM, and CRLF handling
+import nox.strings
+
+test_str: str = "hello world"
+slice_test: str = test_str[0:5]
+
+# Test byte_at and char_from_byte
+b0: int = nox.strings.byte_at(test_str, 0)
+ch0: str = nox.strings.char_from_byte(b0)
+
+# Test BOM detection (0xEF, 0xBB, 0xBF)
+bom_sample: str = nox.strings.char_from_byte(239) + nox.strings.char_from_byte(187) + nox.strings.char_from_byte(191) + "KEY=VAL"
+has_bom: bool = False
+if nox.strings.byte_len(bom_sample) >= 3:
+    if nox.strings.byte_at(bom_sample, 0) == 239 and nox.strings.byte_at(bom_sample, 1) == 187 and nox.strings.byte_at(bom_sample, 2) == 191:
+        has_bom = True
+
+# Test CRLF handling: CR is byte 13
+cr_char: str = nox.strings.char_from_byte(13)
+crlf_sample: str = "A=1" + cr_char + "\nB=2" + cr_char + "\n"
+normalized: str = nox.strings.replace(crlf_sample, cr_char, "")
+lines: list[str] = nox.strings.split(normalized, "\n")
+
+if slice_test != "hello":
+    print("FAIL: slice mismatch: " + slice_test)
+elif ch0 != "h":
+    print("FAIL: char_from_byte mismatch: " + ch0)
+elif not has_bom:
+    print("FAIL: BOM detection failed")
+elif len(lines) < 2 or lines[0] != "A=1" or lines[1] != "B=2":
+    print("FAIL: CRLF normalization failed")
+else:
+    print("PROBE_STRINGS: OK")

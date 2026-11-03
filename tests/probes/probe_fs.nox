@@ -1,0 +1,38 @@
+# Probe 6: nox.fs.metadata, oversized-file rejection, path canonicalization
+from nox.fs import write_string, read_to_string, metadata, remove_file, exists, is_file, FileMetadata, FsError
+from nox.path import canonicalize, components, PathError
+
+tmp_file: str = "tmp_probe_fs_test.txt"
+content: str = "VAULT_PROBE_FS_TEST_CONTENT"
+write_string(tmp_file, content)
+
+meta: FileMetadata = metadata(tmp_file)
+size: int = meta.size
+
+# Check canonicalization
+canon: str = canonicalize(tmp_file)
+comps: list[str] = components(canon)
+
+# Bounded size check logic
+MAX_BOUND: int = 1048576 # 1 MiB
+is_within_limit: bool = size <= MAX_BOUND
+
+# Read and verify content
+read_content: str = read_to_string(tmp_file)
+
+# Cleanup
+remove_file(tmp_file)
+still_exists: bool = exists(tmp_file)
+
+if size != len(content):
+    print("FAIL: size mismatch: expected " + str(len(content)) + ", got " + str(size))
+elif not is_within_limit:
+    print("FAIL: within limit failed")
+elif len(comps) == 0:
+    print("FAIL: components empty")
+elif read_content != content:
+    print("FAIL: read content mismatch")
+elif still_exists:
+    print("FAIL: file was not removed")
+else:
+    print("PROBE_FS: OK")

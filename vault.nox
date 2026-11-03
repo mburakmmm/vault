@@ -1,0 +1,7 @@
+# VAULT — Configuration, Environment & Secret Management for NOX
+# Public Facade
+
+VERSION: str = "0.1.0"
+
+def version() -> str:
+    return VERSION

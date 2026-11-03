@@ -1,0 +1,39 @@
+# Probe 2: dict[str, T], list[T], nested typed classes and safe value copying
+
+class Entry:
+    key: str
+    value: str
+
+    def __init__(self: Entry, key: str, value: str) -> None:
+        self.key = key
+        self.value = value
+
+# Test dict
+d: dict[str, str] = {}
+d["app.name"] = "vault"
+d["env"] = "prod"
+
+# Test list
+items: list[str] = []
+items.append("alpha")
+items.append("beta")
+
+# Test list of objects
+entries: list[Entry] = []
+e1: Entry = Entry("k1", "v1")
+e2: Entry = Entry("k2", "v2")
+entries.append(e1)
+entries.append(e2)
+
+if d["app.name"] != "vault":
+    print("FAIL: dict access")
+elif len(items) != 2:
+    print("FAIL: list len")
+elif items[0] != "alpha" or items[1] != "beta":
+    print("FAIL: list elements")
+elif len(entries) != 2:
+    print("FAIL: entries len")
+elif entries[1].key != "k2" or entries[1].value != "v2":
+    print("FAIL: entry object field")
+else:
+    print("PROBE_COLLECTIONS: OK")

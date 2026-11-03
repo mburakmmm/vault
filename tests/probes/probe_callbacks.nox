@@ -1,0 +1,31 @@
+# Probe 4: Class inheritance / polymorphism for source / provider injection
+
+class BaseProvider:
+    name: str
+
+    def __init__(self: BaseProvider, name: str) -> None:
+        self.name = name
+
+    def get_value(self: BaseProvider, key: str) -> str:
+        return ""
+
+class MemoryProvider(BaseProvider):
+    extra: str
+
+    def __init__(self: MemoryProvider, name: str, extra: str) -> None:
+        self.name = name
+        self.extra = extra
+
+    def get_value(self: MemoryProvider, key: str) -> str:
+        return self.extra + ":" + key
+
+def fetch_from(p: BaseProvider, k: str) -> str:
+    return p.get_value(k)
+
+mp: MemoryProvider = MemoryProvider("mem", "dummy")
+res: str = fetch_from(mp, "port")
+
+if res != "dummy:port":
+    print("FAIL: polymorphism failed: " + res)
+else:
+    print("PROBE_CALLBACKS: OK")

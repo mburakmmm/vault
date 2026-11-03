@@ -1,0 +1,35 @@
+# Probe 1: Custom exceptions with safe error codes (no secret data)
+
+class VaultError(Exception):
+    code: str
+    key: str
+
+    def __init__(self: VaultError, code: str, key: str) -> None:
+        self.code = code
+        self.key = key
+
+def may_fail(fail: bool) -> str:
+    if fail:
+        raise VaultError("CONFIG_MISSING", "database.url")
+    return "ok"
+
+caught: bool = False
+caught_code: str = ""
+caught_key: str = ""
+try:
+    may_fail(True)
+except VaultError as e:
+    caught = True
+    caught_code = e.code
+    caught_key = e.key
+except Exception:
+    pass
+
+if not caught:
+    print("FAIL: Exception not caught")
+elif caught_code != "CONFIG_MISSING":
+    print("FAIL: Wrong code")
+elif caught_key != "database.url":
+    print("FAIL: Wrong key")
+else:
+    print("PROBE_ERRORS: OK")

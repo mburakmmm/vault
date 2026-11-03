@@ -1,0 +1,26 @@
+# Probe 3: str | None and explicit distinction among missing, null and empty
+
+val_some: str | None = "hello"
+val_none: str | None = None
+val_empty: str = ""
+
+is_none_check: bool = False
+if val_none is None:
+    is_none_check = True
+
+is_some_check: bool = False
+if val_some is not None:
+    is_some_check = True
+
+unwrapped: str = ""
+if val_some is not None:
+    unwrapped = val_some
+
+if not is_none_check:
+    print("FAIL: val_none is None failed")
+elif not is_some_check:
+    print("FAIL: val_some is not None failed")
+elif unwrapped != "hello":
+    print("FAIL: unwrapping str | None failed")
+else:
+    print("PROBE_NULLABILITY: OK")

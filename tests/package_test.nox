@@ -1,0 +1,8 @@
+# Smoke test for package skeleton
+from nox.test import assert_eq_str, assert_true
+import vault
+
+v: str = vault.version()
+assert_eq_str(v, "0.1.0", "vault version mismatch")
+
+print("PACKAGE_TEST: PASS")
