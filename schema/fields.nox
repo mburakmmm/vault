@@ -1,0 +1,119 @@
+# VAULT — Typed Schema Field Declarations
+# Module: schema.fields
+
+from core.types import ConfigValue, make_string, make_int, make_float, make_bool, make_missing, make_array
+
+# Field Types
+FIELD_TYPE_STRING: int = 1
+FIELD_TYPE_INT: int = 2
+FIELD_TYPE_FLOAT: int = 3
+FIELD_TYPE_BOOL: int = 4
+FIELD_TYPE_STRING_LIST: int = 5
+FIELD_TYPE_OBJECT: int = 6
+
+class Field:
+    key: str
+    field_type: int
+    required: bool
+    nullable: bool
+    non_blank: bool
+    secret: bool
+    has_default: bool
+    default_val: ConfigValue
+    has_min: bool
+    min_val: float
+    has_max: bool
+    max_val: float
+    has_min_len: bool
+    min_len: int
+    has_max_len: bool
+    max_len: int
+    allowed_choices: list[str]
+
+    def __init__(self: Field, key: str, field_type: int, required: bool, nullable: bool, non_blank: bool, secret: bool, has_default: bool, default_val: ConfigValue, has_min: bool, min_val: float, has_max: bool, max_val: float, has_min_len: bool, min_len: int, has_max_len: bool, max_len: int, allowed_choices: list[str]) -> None:
+        self.key = key
+        self.field_type = field_type
+        self.required = required
+        self.nullable = nullable
+        self.non_blank = non_blank
+        self.secret = secret
+        self.has_default = has_default
+        self.default_val = default_val
+        self.has_min = has_min
+        self.min_val = min_val
+        self.has_max = has_max
+        self.max_val = max_val
+        self.has_min_len = has_min_len
+        self.min_len = min_len
+        self.has_max_len = has_max_len
+        self.max_len = max_len
+        self.allowed_choices = allowed_choices
+
+def new_string_field(key: str, required: bool, has_default: bool, default_val: str, secret: bool, non_blank: bool) -> Field:
+    def_cv: ConfigValue = make_missing()
+    if has_default:
+        def_cv = make_string(default_val)
+    empty_choices: list[str] = []
+    return Field(key, FIELD_TYPE_STRING, required, False, non_blank, secret, has_default, def_cv, False, 0.0, False, 0.0, False, 0, False, 0, empty_choices)
+
+def new_int_field(key: str, required: bool, has_default: bool, default_val: int, has_min: bool, min_val: int, has_max: bool, max_val: int, secret: bool) -> Field:
+    def_cv: ConfigValue = make_missing()
+    if has_default:
+        def_cv = make_int(default_val)
+    empty_choices: list[str] = []
+    return Field(key, FIELD_TYPE_INT, required, False, False, secret, has_default, def_cv, has_min, float(min_val), has_max, float(max_val), False, 0, False, 0, empty_choices)
+
+def new_float_field(key: str, required: bool, has_default: bool, default_val: float, has_min: bool, min_val: float, has_max: bool, max_val: float, secret: bool) -> Field:
+    def_cv: ConfigValue = make_missing()
+    if has_default:
+        def_cv = make_float(default_val)
+    empty_choices: list[str] = []
+    return Field(key, FIELD_TYPE_FLOAT, required, False, False, secret, has_default, def_cv, has_min, min_val, has_max, max_val, False, 0, False, 0, empty_choices)
+
+def new_bool_field(key: str, required: bool, has_default: bool, default_val: bool, secret: bool) -> Field:
+    def_cv: ConfigValue = make_missing()
+    if has_default:
+        def_cv = make_bool(default_val)
+    empty_choices: list[str] = []
+    return Field(key, FIELD_TYPE_BOOL, required, False, False, secret, has_default, def_cv, False, 0.0, False, 0.0, False, 0, False, 0, empty_choices)
+
+def new_string_list_field(key: str, required: bool, secret: bool) -> Field:
+    def_cv: ConfigValue = make_array([])
+    empty_choices: list[str] = []
+    return Field(key, FIELD_TYPE_STRING_LIST, required, False, False, secret, False, def_cv, False, 0.0, False, 0.0, False, 0, False, 0, empty_choices)
+
+class ConfigSchema:
+    fields: dict[str, Field]
+    field_keys: list[str]
+
+    def __init__(self: ConfigSchema) -> None:
+        self.fields = {}
+        self.field_keys = []
+
+    def add_field(self: ConfigSchema, f: Field) -> None:
+        self.fields[f.key] = f
+        self.field_keys.append(f.key)
+
+    def add_string(self: ConfigSchema, key: str, required: bool, has_default: bool, default_val: str, secret: bool, non_blank: bool) -> None:
+        self.add_field(new_string_field(key, required, has_default, default_val, secret, non_blank))
+
+    def add_int(self: ConfigSchema, key: str, required: bool, has_default: bool, default_val: int, has_min: bool, min_val: int, has_max: bool, max_val: int, secret: bool) -> None:
+        self.add_field(new_int_field(key, required, has_default, default_val, has_min, min_val, has_max, max_val, secret))
+
+    def add_float(self: ConfigSchema, key: str, required: bool, has_default: bool, default_val: float, has_min: bool, min_val: float, has_max: bool, max_val: float, secret: bool) -> None:
+        self.add_field(new_float_field(key, required, has_default, default_val, has_min, min_val, has_max, max_val, secret))
+
+    def add_bool(self: ConfigSchema, key: str, required: bool, has_default: bool, default_val: bool, secret: bool) -> None:
+        self.add_field(new_bool_field(key, required, has_default, default_val, secret))
+
+    def add_string_list(self: ConfigSchema, key: str, required: bool, secret: bool) -> None:
+        self.add_field(new_string_list_field(key, required, secret))
+
+    def has_field(self: ConfigSchema, key: str) -> bool:
+        return key in self.fields
+
+    def get_field(self: ConfigSchema, key: str) -> Field:
+        return self.fields[key]
+
+    def keys(self: ConfigSchema) -> list[str]:
+        return self.field_keys

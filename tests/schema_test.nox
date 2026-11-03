@@ -1,0 +1,131 @@
+# Test suite for Typed Schema and Aggregate Validation
+# Regression scenarios: SCHEMA-01, SCHEMA-02, SCHEMA-03, SCHEMA-04, SCHEMA-05
+
+from nox.test import assert_eq_str, assert_eq_int, assert_true
+from core.types import ConfigEntry, ConfigValue, make_string, make_int, make_null
+from core.errors import ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_SECRET_SOURCE_DENIED
+from core.merge import merge_sources
+from sources.interface import ConfigSource
+from sources.memory import MemorySource
+from schema.fields import ConfigSchema
+from schema.validate import validate_entries, ValidationReport, SafeConfigDiagnostic
+
+# -------------------------------------------------------------------------
+# Test 1: SCHEMA-01 — Required Secret Missing in Production
+# -------------------------------------------------------------------------
+schema_prod: ConfigSchema = ConfigSchema()
+schema_prod.add_string("APP_NAME", True, False, "", False, True)
+schema_prod.add_string("DATABASE_URL", True, False, "", True, True)
+
+src_prod: MemorySource = MemorySource("test_src", 1, "prod", False)
+src_prod.set_string("APP_NAME", "VaultService")
+# DATABASE_URL is deliberately omitted!
+
+sources_prod: list[ConfigSource] = []
+sources_prod.append(src_prod)
+merged_prod: dict[str, ConfigEntry] = merge_sources(sources_prod)
+
+report_prod: ValidationReport = validate_entries(merged_prod, schema_prod, True)
+assert_true(not report_prod.is_valid, "missing required secret must fail validation")
+assert_eq_int(report_prod.error_count(), 1, "expected 1 validation error")
+diag_s1: SafeConfigDiagnostic = report_prod.diagnostics[0]
+assert_eq_str(diag_s1.key, "DATABASE_URL", "missing secret key")
+assert_eq_str(diag_s1.code, ERR_CONFIG_MISSING, "missing code")
+
+# -------------------------------------------------------------------------
+# Test 2: SCHEMA-02 — Integer Bounds & Syntax
+# -------------------------------------------------------------------------
+schema_int: ConfigSchema = ConfigSchema()
+schema_int.add_int("PORT", True, False, 0, True, 1024, True, 65535, False)
+
+# Case A: Out of range (< 1024)
+src_range: MemorySource = MemorySource("test_range", 1, "base", False)
+src_range.set_string("PORT", "80")
+
+sources_range: list[ConfigSource] = []
+sources_range.append(src_range)
+merged_range: dict[str, ConfigEntry] = merge_sources(sources_range)
+
+report_range: ValidationReport = validate_entries(merged_range, schema_int, False)
+assert_true(not report_range.is_valid, "port 80 must be out of range")
+assert_eq_str(report_range.diagnostics[0].code, ERR_CONFIG_OUT_OF_RANGE, "out of range error code")
+
+# Case B: Invalid integer syntax
+src_syntax: MemorySource = MemorySource("test_syntax", 1, "base", False)
+src_syntax.set_string("PORT", "not_a_number")
+
+sources_syntax: list[ConfigSource] = []
+sources_syntax.append(src_syntax)
+merged_syntax: dict[str, ConfigEntry] = merge_sources(sources_syntax)
+
+report_syntax: ValidationReport = validate_entries(merged_syntax, schema_int, False)
+assert_true(not report_syntax.is_valid, "invalid int syntax must fail")
+assert_eq_str(report_syntax.diagnostics[0].code, ERR_CONFIG_TYPE_MISMATCH, "type mismatch error code")
+
+# -------------------------------------------------------------------------
+# Test 3: SCHEMA-03 — Invalid Boolean
+# -------------------------------------------------------------------------
+schema_bool: ConfigSchema = ConfigSchema()
+schema_bool.add_bool("DEBUG_MODE", True, False, False, False)
+
+src_bool: MemorySource = MemorySource("test_bool", 1, "base", False)
+src_bool.set_string("DEBUG_MODE", "maybe")
+
+sources_bool: list[ConfigSource] = []
+sources_bool.append(src_bool)
+merged_bool: dict[str, ConfigEntry] = merge_sources(sources_bool)
+
+report_bool: ValidationReport = validate_entries(merged_bool, schema_bool, False)
+assert_true(not report_bool.is_valid, "maybe is not a valid boolean")
+assert_eq_str(report_bool.diagnostics[0].code, ERR_CONFIG_TYPE_MISMATCH, "bool type mismatch code")
+
+# -------------------------------------------------------------------------
+# Test 4: SCHEMA-04 — NULL on Non-Nullable Field
+# -------------------------------------------------------------------------
+schema_null: ConfigSchema = ConfigSchema()
+schema_null.add_string("HOST", True, False, "", False, False)
+
+src_null: MemorySource = MemorySource("test_null", 1, "base", False)
+src_null.set("HOST", make_null())
+
+sources_null: list[ConfigSource] = []
+sources_null.append(src_null)
+merged_null: dict[str, ConfigEntry] = merge_sources(sources_null)
+
+report_null: ValidationReport = validate_entries(merged_null, schema_null, False)
+assert_true(not report_null.is_valid, "null on non-nullable field must fail")
+assert_eq_str(report_null.diagnostics[0].code, ERR_CONFIG_NULL_NOT_ALLOWED, "null not allowed code")
+
+# -------------------------------------------------------------------------
+# Test 5: SCHEMA-05 — Aggregate Diagnostics for Multiple Invalid Fields
+# -------------------------------------------------------------------------
+schema_multi: ConfigSchema = ConfigSchema()
+schema_multi.add_int("A_PORT", True, False, 0, True, 1, True, 100, False)
+schema_multi.add_bool("B_BOOL", True, False, False, False)
+schema_multi.add_string("C_REQUIRED", True, False, "", False, True)
+
+src_multi: MemorySource = MemorySource("test_multi", 1, "base", False)
+src_multi.set_string("A_PORT", "999")       # Out of range!
+src_multi.set_string("B_BOOL", "invalid")   # Type mismatch!
+# C_REQUIRED is completely missing!
+
+sources_multi: list[ConfigSource] = []
+sources_multi.append(src_multi)
+merged_multi: dict[str, ConfigEntry] = merge_sources(sources_multi)
+
+report_multi: ValidationReport = validate_entries(merged_multi, schema_multi, False)
+assert_true(not report_multi.is_valid, "multiple errors must fail validation")
+# Verify that ALL 3 errors were collected (aggregated, not stopping at first error!)
+assert_eq_int(report_multi.error_count(), 3, "expected all 3 errors to be aggregated")
+
+# Verify deterministic sorted order by key (A_PORT, then B_BOOL, then C_REQUIRED)
+assert_eq_str(report_multi.diagnostics[0].key, "A_PORT", "diag 0 key")
+assert_eq_str(report_multi.diagnostics[0].code, ERR_CONFIG_OUT_OF_RANGE, "diag 0 code")
+
+assert_eq_str(report_multi.diagnostics[1].key, "B_BOOL", "diag 1 key")
+assert_eq_str(report_multi.diagnostics[1].code, ERR_CONFIG_TYPE_MISMATCH, "diag 1 code")
+
+assert_eq_str(report_multi.diagnostics[2].key, "C_REQUIRED", "diag 2 key")
+assert_eq_str(report_multi.diagnostics[2].code, ERR_CONFIG_MISSING, "diag 2 code")
+
+print("SCHEMA_TEST: ALL PASS")

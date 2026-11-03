@@ -25,7 +25,7 @@
 | **v0.1.0** | **Faz 0** | Yetenek Denetimi (Capability Audit), NOX Probları ve İskelet Paket | [x] Tamamlandı |
 | **v0.2.0** | **Faz 1** | Saf (Pure) & Bounded `.env` Ayrıştırıcı (Parser & Tokenizer) | [x] Tamamlandı |
 | **v0.2.5** | **Faz 2** | Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik | [x] Tamamlandı |
-| **v0.3.0** | **Faz 3** | Tipli Şema (Typed Schema) & Toplu Güvenli Doğrulama (**MVP Sürümü**) | [ ] Beklemede |
+| **v0.3.0** | **Faz 3** | Tipli Şema (Typed Schema) & Toplu Güvenli Doğrulama (**MVP Sürümü**) | [x] Tamamlandı |
 | **v0.4.0** | **Faz 4** | Yapılandırılmış Kaynaklar (JSON, TOML, YAML Köprüleri) & Kök Korumalı Dosyalar | [ ] Beklemede |
 | **v0.5.0** | **Faz 5** | Profiller (Profiles), Değişken İnterpolasyonu & Sır Bulaşması (Secret Taint) | [ ] Beklemede |
 | **v0.6.0** | **Faz 6** | Sır Sınıflandırması, Maskeleme (Redaction) & Güvenli İnceleme (**Pratik Paket**) | [ ] Beklemede |
@@ -128,36 +128,36 @@
 
 ---
 
-### [ ] Sürüm v0.3.0 — Faz 3: Tipli Şema (Typed Schema) & Toplu Doğrulama (**MVP DÖNÜM NOKTASI**)
+### [x] Sürüm v0.3.0 — Faz 3: Tipli Şema (Typed Schema) & Toplu Doğrulama (**MVP DÖNÜM NOKTASI**)
 > **Hedef:** Kullanıcıların tipli alanlar tanımlamasını, kısıtları denetlemesini ve toplu, güvenli doğrulama raporları almasını sağlamak.
 
-- [ ] **3.1 Şema Alan Tanımları (`schema/fields.nox`)**
-  - [ ] `FieldType`: String, Int, Float, Bool, StringList, NestedObject.
-  - [ ] Alan özellikleri: `required`, `nullable`, `non_blank`, `default_value`, `secret`.
-  - [ ] Sayısal ve metinsel kısıtlar: `min`, `max`, `min_length`, `max_length`, `one_of`.
-  - [ ] `ConfigSchema` yapısı ve akıcı/net alan ekleme API'si.
-- [ ] **3.2 Katı Tip Dönüşümü ve Zorlama (`schema/coerce.nox`)**
-  - [ ] Metinden (`.env`) tam sayıya katı çevrim ve taşma (overflow) denetimi.
-  - [ ] Mantıksal (boolean) katı çevrim: `true`/`false` (büyük/küçük harf duyarsız).
-  - [ ] Ondalıklı (float) katı çevrim (NaN ve Infinity reddi).
-  - [ ] Liste çevrimi (dizi tipleri ve virgülle ayrılmış dizgeler).
-- [ ] **3.3 Toplu Doğrulama Motoru (`schema/validate.nox`)**
-  - [ ] İlk hatada durmayan, keşfedilebilir tüm hataları toplayan doğrulayıcı (`ValidationReport`).
-  - [ ] Hata sıralamasının deterministik olması (kaynak sırası, anahtar, hata kodu).
-  - [ ] Hatalarda değer içeriğinin gizlenmesi (`SafeConfigDiagnostic`).
-- [ ] **3.4 Tipli Snapshot Getters (`core/snapshot.nox`)**
-  - [ ] `get_string(key) -> str`
-  - [ ] `get_int(key) -> int`
-  - [ ] `get_float(key) -> float`
-  - [ ] `get_bool(key) -> bool`
-  - [ ] `get_list(key) -> list[str]`
-  - [ ] `has(key) -> bool`, `is_null(key) -> bool`
-- [ ] **3.5 Testler (`tests/schema_test.nox`, `tests/integration_test.nox`)**
-  - [ ] Zorunlu alan ve varsayılan değer testleri.
-  - [ ] Tip uyumsuzluğu ve aralık dışı testleri (`SCHEMA-02`, `SCHEMA-03`, `SCHEMA-04`).
-  - [ ] Birden fazla hatanın toplu raporlanması testi (`SCHEMA-05`).
-  - [ ] Üretim modunda eksik sır ayarının fail-closed kapanması (`SCHEMA-01`).
-  - [ ] **Kabul Kapısı (Gate 3 - MVP Gate):** MVP tamamlanmalı, `tests/integration_test.nox` uçtan uca çalışmalıdır.
+- [x] **3.1 Şema Alan Tanımları (`schema/fields.nox`)**
+  - [x] `FieldType`: String, Int, Float, Bool, StringList, NestedObject.
+  - [x] Alan özellikleri: `required`, `nullable`, `non_blank`, `default_value`, `secret`.
+  - [x] Sayısal ve metinsel kısıtlar: `min`, `max`, `min_length`, `max_length`, `one_of`.
+  - [x] `ConfigSchema` yapısı ve akıcı/net alan ekleme API'si.
+- [x] **3.2 Katı Tip Dönüşümü ve Zorlama (`schema/coerce.nox`)**
+  - [x] Metinden (`.env`) tam sayıya katı çevrim ve taşma (overflow) denetimi.
+  - [x] Mantıksal (boolean) katı çevrim: `true`/`false` (büyük/küçük harf duyarsız).
+  - [x] Ondalıklı (float) katı çevrim (NaN ve Infinity reddi).
+  - [x] Liste çevrimi (dizi tipleri ve virgülle ayrılmış dizgeler).
+- [x] **3.3 Toplu Doğrulama Motoru (`schema/validate.nox`)**
+  - [x] İlk hatada durmayan, keşfedilebilir tüm hataları toplayan doğrulayıcı (`ValidationReport`).
+  - [x] Hata sıralamasının deterministik olması (kaynak sırası, anahtar, hata kodu).
+  - [x] Hatalarda değer içeriğinin gizlenmesi (`SafeConfigDiagnostic`).
+- [x] **3.4 Tipli Snapshot Getters (`core/snapshot.nox`)**
+  - [x] `get_string(key) -> str`
+  - [x] `get_int(key) -> int`
+  - [x] `get_float(key) -> float`
+  - [x] `get_bool(key) -> bool`
+  - [x] `get_list(key) -> list[str]`
+  - [x] `has(key) -> bool`, `is_null(key) -> bool`
+- [x] **3.5 Testler (`tests/schema_test.nox`, `tests/integration_test.nox`)**
+  - [x] Zorunlu alan ve varsayılan değer testleri.
+  - [x] Tip uyumsuzluğu ve aralık dışı testleri (`SCHEMA-02`, `SCHEMA-03`, `SCHEMA-04`).
+  - [x] Birden fazla hatanın toplu raporlanması testi (`SCHEMA-05`).
+  - [x] Üretim modunda eksik sır ayarının fail-closed kapanması (`SCHEMA-01`).
+  - [x] **Kabul Kapısı (Gate 3 - MVP Gate):** MVP tamamlanmalı, `tests/integration_test.nox` uçtan uca çalışmalıdır.
 
 ---
 

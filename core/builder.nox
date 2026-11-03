@@ -1,0 +1,74 @@
+# VAULT — Configuration Builder
+# Module: core.builder
+
+from core.types import ConfigEntry, ConfigValue, make_string
+from core.errors import ConfigError, ERR_CONFIG_MISSING
+from core.merge import merge_sources
+from core.snapshot import ConfigSnapshot
+from sources.interface import ConfigSource
+from sources.memory import MemorySource
+from env.source import DotenvSource
+from env.process import ProcessEnvSource
+from schema.fields import ConfigSchema
+from schema.validate import validate_entries, ValidationReport, SafeConfigDiagnostic
+
+class ConfigBuilder:
+    sources: list[ConfigSource]
+    schema: ConfigSchema | None
+    is_production: bool
+    builder_version: str
+
+    def __init__(self: ConfigBuilder) -> None:
+        self.sources = []
+        self.schema = None
+        self.is_production = False
+        self.builder_version = "v1"
+
+    def with_source(self: ConfigBuilder, src: ConfigSource) -> ConfigBuilder:
+        self.sources.append(src)
+        return self
+
+    def with_defaults(self: ConfigBuilder, defaults: dict[str, str]) -> ConfigBuilder:
+        ms: MemorySource = MemorySource("memory_defaults", 2, "base", True)
+        for k in defaults:
+            ms.set_string(k, defaults[k])
+        self.sources.append(ms)
+        return self
+
+    def with_dotenv(self: ConfigBuilder, path: str, optional: bool) -> ConfigBuilder:
+        ds: DotenvSource = DotenvSource(path, optional, 5, "base")
+        self.sources.append(ds)
+        return self
+
+    def with_process_env(self: ConfigBuilder, allowed_keys: list[str], mapping: dict[str, str]) -> ConfigBuilder:
+        ps: ProcessEnvSource = ProcessEnvSource(allowed_keys, mapping, 8, "base")
+        self.sources.append(ps)
+        return self
+
+    def with_override(self: ConfigBuilder, key: str, val: str) -> ConfigBuilder:
+        ov: MemorySource = MemorySource("runtime_override", 9, "base", False)
+        ov.set_string(key, val)
+        self.sources.append(ov)
+        return self
+
+    def with_schema(self: ConfigBuilder, schema: ConfigSchema) -> ConfigBuilder:
+        self.schema = schema
+        return self
+
+    def set_production(self: ConfigBuilder, is_prod: bool) -> ConfigBuilder:
+        self.is_production = is_prod
+        return self
+
+    def build(self: ConfigBuilder) -> ConfigSnapshot:
+        merged: dict[str, ConfigEntry] = merge_sources(self.sources)
+
+        schema_opt: ConfigSchema | None = self.schema
+        if schema_opt is not None:
+            report: ValidationReport = validate_entries(merged, schema_opt, self.is_production)
+            if not report.is_valid:
+                first_err: SafeConfigDiagnostic = report.diagnostics[0]
+                total_errors: int = report.error_count()
+                summary_msg: str = first_err.message + " (" + str(total_errors) + " total validation errors)"
+                raise ConfigError(first_err.code, first_err.key, summary_msg)
+
+        return ConfigSnapshot(merged, self.builder_version)

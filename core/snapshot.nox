@@ -1,8 +1,9 @@
 # VAULT — Immutable Config Snapshot
 # Module: core.snapshot
 
-from core.types import ConfigEntry, ConfigValue, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, PRESENCE_NULL, PRESENCE_MISSING
+from core.types import ConfigEntry, ConfigValue, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, VAL_ARRAY, PRESENCE_NULL, PRESENCE_MISSING
 from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH
+import nox.strings
 
 class ConfigSnapshot:
     entries: dict[str, ConfigEntry]
@@ -41,6 +42,110 @@ class ConfigSnapshot:
             return str(v.f)
 
         raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "cannot convert structured container to string")
+
+    def get_int(self: ConfigSnapshot, key: str) -> int:
+        if key not in self.entries:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
+
+        e: ConfigEntry = self.entries[key]
+        if e.presence == PRESENCE_NULL:
+            raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
+
+        v: ConfigValue = e.val
+        if v.kind == VAL_INTEGER:
+            return v.i
+        if v.kind == VAL_STRING:
+            trimmed: str = nox.strings.trim(v.s)
+            try:
+                return int(trimmed)
+            except Exception:
+                raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "cannot convert string to integer")
+
+        raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "expected integer value")
+
+    def get_float(self: ConfigSnapshot, key: str) -> float:
+        if key not in self.entries:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
+
+        e: ConfigEntry = self.entries[key]
+        if e.presence == PRESENCE_NULL:
+            raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
+
+        v: ConfigValue = e.val
+        if v.kind == VAL_FLOAT:
+            return v.f
+        if v.kind == VAL_INTEGER:
+            return float(v.i)
+        if v.kind == VAL_STRING:
+            trimmed: str = nox.strings.trim(v.s)
+            try:
+                return float(trimmed)
+            except Exception:
+                raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "cannot convert string to float")
+
+        raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "expected float value")
+
+    def get_bool(self: ConfigSnapshot, key: str) -> bool:
+        if key not in self.entries:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
+
+        e: ConfigEntry = self.entries[key]
+        if e.presence == PRESENCE_NULL:
+            raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
+
+        v: ConfigValue = e.val
+        if v.kind == VAL_BOOLEAN:
+            return v.b
+        if v.kind == VAL_INTEGER:
+            if v.i == 1:
+                return True
+            if v.i == 0:
+                return False
+            raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "integer boolean must be 0 or 1")
+        if v.kind == VAL_STRING:
+            low: str = nox.strings.lower(nox.strings.trim(v.s))
+            if low == "true" or low == "1" or low == "yes" or low == "on":
+                return True
+            if low == "false" or low == "0" or low == "no" or low == "off":
+                return False
+            raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "invalid boolean representation")
+
+        raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "expected boolean value")
+
+    def get_list(self: ConfigSnapshot, key: str) -> list[str]:
+        if key not in self.entries:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
+
+        e: ConfigEntry = self.entries[key]
+        if e.presence == PRESENCE_NULL:
+            raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
+
+        v: ConfigValue = e.val
+        if v.kind == VAL_ARRAY:
+            res: list[str] = []
+            idx: int = 0
+            while idx < len(v.arr):
+                item: ConfigValue = v.arr[idx]
+                if item.kind == VAL_STRING:
+                    res.append(item.s)
+                else:
+                    res.append(str(item.i) if item.kind == VAL_INTEGER else "")
+                idx = idx + 1
+            return res
+        if v.kind == VAL_STRING:
+            trimmed: str = nox.strings.trim(v.s)
+            if len(trimmed) == 0:
+                empty_res: list[str] = []
+                return empty_res
+            parts: list[str] = nox.strings.split(trimmed, ",")
+            res: list[str] = []
+            idx: int = 0
+            while idx < len(parts):
+                res.append(nox.strings.trim(parts[idx]))
+                idx = idx + 1
+            return res
+
+        raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "expected list value")
 
     def explain(self: ConfigSnapshot, key: str) -> str:
         if key not in self.entries:

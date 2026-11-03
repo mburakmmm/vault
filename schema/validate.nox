@@ -1,0 +1,157 @@
+# VAULT — Aggregate Safe Validation Engine
+# Module: schema.validate
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, PRESENCE_MISSING, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
+from core.errors import ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_SECRET_SOURCE_DENIED
+from core.snapshot import ConfigSnapshot
+from schema.fields import ConfigSchema, Field, FIELD_TYPE_STRING, FIELD_TYPE_INT, FIELD_TYPE_FLOAT, FIELD_TYPE_BOOL, FIELD_TYPE_STRING_LIST, FIELD_TYPE_OBJECT
+from schema.coerce import coerce_value, CoerceResult
+import nox.strings
+
+class SafeConfigDiagnostic:
+    code: str
+    key: str
+    expected_type: str
+    constraint_id: str
+    message: str
+
+    def __init__(self: SafeConfigDiagnostic, code: str, key: str, expected_type: str, constraint_id: str, message: str) -> None:
+        self.code = code
+        self.key = key
+        self.expected_type = expected_type
+        self.constraint_id = constraint_id
+        self.message = message
+
+    def to_string(self: SafeConfigDiagnostic) -> str:
+        return "[" + self.code + "] key='" + self.key + "' (expected " + self.expected_type + "): " + self.message
+
+class ValidationReport:
+    is_valid: bool
+    diagnostics: list[SafeConfigDiagnostic]
+
+    def __init__(self: ValidationReport, is_valid: bool, diagnostics: list[SafeConfigDiagnostic]) -> None:
+        self.is_valid = is_valid
+        self.diagnostics = diagnostics
+
+    def error_count(self: ValidationReport) -> int:
+        return len(self.diagnostics)
+
+    def errors(self: ValidationReport) -> list[SafeConfigDiagnostic]:
+        return self.diagnostics
+
+def _type_name(t: int) -> str:
+    if t == FIELD_TYPE_STRING:
+        return "string"
+    if t == FIELD_TYPE_INT:
+        return "int"
+    if t == FIELD_TYPE_FLOAT:
+        return "float"
+    if t == FIELD_TYPE_BOOL:
+        return "bool"
+    if t == FIELD_TYPE_STRING_LIST:
+        return "string_list"
+    if t == FIELD_TYPE_OBJECT:
+        return "object"
+    return "unknown"
+
+def _sort_diagnostics(diags: list[SafeConfigDiagnostic]) -> list[SafeConfigDiagnostic]:
+    result: list[SafeConfigDiagnostic] = []
+    idx: int = 0
+    while idx < len(diags):
+        result.append(diags[idx])
+        idx = idx + 1
+
+    n: int = len(result)
+    i: int = 0
+    while i < n:
+        j: int = 0
+        while j < n - i - 1:
+            # Sort by key, then by code
+            swap: bool = False
+            if result[j].key > result[j + 1].key:
+                swap = True
+            elif result[j].key == result[j + 1].key and result[j].code > result[j + 1].code:
+                swap = True
+
+            if swap:
+                temp: SafeConfigDiagnostic = result[j]
+                result[j] = result[j + 1]
+                result[j + 1] = temp
+            j = j + 1
+        i = i + 1
+
+    return result
+
+def validate_entries(entries: dict[str, ConfigEntry], schema: ConfigSchema, is_production: bool) -> ValidationReport:
+    diags: list[SafeConfigDiagnostic] = []
+    field_keys: list[str] = schema.keys()
+
+    idx: int = 0
+    while idx < len(field_keys):
+        k: str = field_keys[idx]
+        f: Field = schema.get_field(k)
+        t_name: str = _type_name(f.field_type)
+
+        if k not in entries:
+            # Field absent in merged sources
+            if f.has_default:
+                # Apply default value
+                origin: SourceOrigin = SourceOrigin("schema_default", "defaults", "base", 1)
+                default_entry: ConfigEntry = ConfigEntry(k, f.default_val, PRESENCE_SUPPLIED, origin, f.secret, True)
+                entries[k] = default_entry
+
+                # Strict production check: secrets cannot use hardcoded defaults
+                if is_production and f.secret:
+                    diags.append(SafeConfigDiagnostic(ERR_CONFIG_SECRET_SOURCE_DENIED, k, t_name, "production_secret_default", "secret cannot use default value in production"))
+            elif f.required:
+                diags.append(SafeConfigDiagnostic(ERR_CONFIG_MISSING, k, t_name, "required", "required configuration setting is missing"))
+        else:
+            e: ConfigEntry = entries[k]
+
+            # Mark secret if declared in schema
+            if f.secret:
+                e.is_secret = True
+
+            # Null check
+            if e.presence == PRESENCE_NULL:
+                if not f.nullable:
+                    diags.append(SafeConfigDiagnostic(ERR_CONFIG_NULL_NOT_ALLOWED, k, t_name, "not_nullable", "null value is not allowed"))
+            elif e.presence == PRESENCE_EMPTY:
+                if f.non_blank:
+                    diags.append(SafeConfigDiagnostic(ERR_CONFIG_EMPTY_NOT_ALLOWED, k, t_name, "non_blank", "empty value is not allowed"))
+                else:
+                    # Coerce empty value
+                    cr: CoerceResult = coerce_value(e.val, f.field_type)
+                    if cr.success:
+                        e.val = cr.val
+                    else:
+                        diags.append(SafeConfigDiagnostic(cr.err_code, k, t_name, "type_coercion", cr.err_msg))
+            else:
+                # Value supplied: Coerce and check bounds
+                cr: CoerceResult = coerce_value(e.val, f.field_type)
+                if not cr.success:
+                    diags.append(SafeConfigDiagnostic(cr.err_code, k, t_name, "type_coercion", cr.err_msg))
+                else:
+                    e.val = cr.val
+                    # Numeric range checks
+                    if f.field_type == FIELD_TYPE_INT or f.field_type == FIELD_TYPE_FLOAT:
+                        num: float = float(cr.val.i) if cr.val.kind == VAL_INTEGER else cr.val.f
+                        if f.has_min and num < f.min_val:
+                            diags.append(SafeConfigDiagnostic(ERR_CONFIG_OUT_OF_RANGE, k, t_name, "min", "value below minimum bound"))
+                        if f.has_max and num > f.max_val:
+                            diags.append(SafeConfigDiagnostic(ERR_CONFIG_OUT_OF_RANGE, k, t_name, "max", "value exceeds maximum bound"))
+
+                    # String non-blank checks
+                    if f.field_type == FIELD_TYPE_STRING:
+                        if f.non_blank and len(nox.strings.trim(cr.val.s)) == 0:
+                            diags.append(SafeConfigDiagnostic(ERR_CONFIG_EMPTY_NOT_ALLOWED, k, t_name, "non_blank", "whitespace-only value not allowed"))
+
+            # Production mode secret origin check
+            if is_production and f.secret and e.is_default:
+                diags.append(SafeConfigDiagnostic(ERR_CONFIG_SECRET_SOURCE_DENIED, k, t_name, "production_secret_default", "secret cannot use default source in production"))
+
+        idx = idx + 1
+
+    sorted_diags: list[SafeConfigDiagnostic] = _sort_diagnostics(diags)
+    is_valid: bool = len(sorted_diags) == 0
+    return ValidationReport(is_valid, sorted_diags)

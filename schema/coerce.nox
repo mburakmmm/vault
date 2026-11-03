@@ -1,0 +1,115 @@
+# VAULT — Strict Type Coercion Engine
+# Module: schema.coerce
+
+from core.types import ConfigValue, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, VAL_ARRAY, VAL_OBJECT, make_string, make_int, make_float, make_bool, make_array, make_missing
+from core.errors import ERR_CONFIG_TYPE_MISMATCH
+from schema.fields import FIELD_TYPE_STRING, FIELD_TYPE_INT, FIELD_TYPE_FLOAT, FIELD_TYPE_BOOL, FIELD_TYPE_STRING_LIST, FIELD_TYPE_OBJECT
+import nox.strings
+
+class CoerceResult:
+    success: bool
+    val: ConfigValue
+    err_code: str
+    err_msg: str
+
+    def __init__(self: CoerceResult, success: bool, val: ConfigValue, err_code: str, err_msg: str) -> None:
+        self.success = success
+        self.val = val
+        self.err_code = err_code
+        self.err_msg = err_msg
+
+def coerce_string(cv: ConfigValue) -> CoerceResult:
+    if cv.kind == VAL_STRING:
+        return CoerceResult(True, cv, "", "")
+    if cv.kind == VAL_INTEGER:
+        return CoerceResult(True, make_string(str(cv.i)), "", "")
+    if cv.kind == VAL_FLOAT:
+        return CoerceResult(True, make_string(str(cv.f)), "", "")
+    if cv.kind == VAL_BOOLEAN:
+        if cv.b:
+            return CoerceResult(True, make_string("true"), "", "")
+        return CoerceResult(True, make_string("false"), "", "")
+    return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "cannot convert container to string")
+
+def coerce_int(cv: ConfigValue) -> CoerceResult:
+    if cv.kind == VAL_INTEGER:
+        return CoerceResult(True, cv, "", "")
+    if cv.kind == VAL_STRING:
+        trimmed: str = nox.strings.trim(cv.s)
+        try:
+            val_i: int = int(trimmed)
+            return CoerceResult(True, make_int(val_i), "", "")
+        except Exception:
+            return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "invalid integer syntax")
+    return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "expected integer")
+
+def coerce_float(cv: ConfigValue) -> CoerceResult:
+    if cv.kind == VAL_FLOAT:
+        return CoerceResult(True, cv, "", "")
+    if cv.kind == VAL_INTEGER:
+        return CoerceResult(True, make_float(float(cv.i)), "", "")
+    if cv.kind == VAL_STRING:
+        trimmed: str = nox.strings.trim(cv.s)
+        try:
+            val_f: float = float(trimmed)
+            return CoerceResult(True, make_float(val_f), "", "")
+        except Exception:
+            return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "invalid float syntax")
+    return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "expected float")
+
+def coerce_bool(cv: ConfigValue) -> CoerceResult:
+    if cv.kind == VAL_BOOLEAN:
+        return CoerceResult(True, cv, "", "")
+    if cv.kind == VAL_INTEGER:
+        if cv.i == 1:
+            return CoerceResult(True, make_bool(True), "", "")
+        if cv.i == 0:
+            return CoerceResult(True, make_bool(False), "", "")
+        return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "integer boolean must be 0 or 1")
+    if cv.kind == VAL_STRING:
+        low: str = nox.strings.lower(nox.strings.trim(cv.s))
+        if low == "true" or low == "1" or low == "yes" or low == "on":
+            return CoerceResult(True, make_bool(True), "", "")
+        if low == "false" or low == "0" or low == "no" or low == "off":
+            return CoerceResult(True, make_bool(False), "", "")
+        return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "invalid boolean representation")
+    return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "expected boolean")
+
+def coerce_string_list(cv: ConfigValue) -> CoerceResult:
+    if cv.kind == VAL_ARRAY:
+        out_items: list[ConfigValue] = []
+        idx: int = 0
+        while idx < len(cv.arr):
+            item: ConfigValue = cv.arr[idx]
+            if item.kind == VAL_STRING:
+                out_items.append(item)
+            else:
+                out_items.append(make_string(str(item.i) if item.kind == VAL_INTEGER else ""))
+            idx = idx + 1
+        return CoerceResult(True, make_array(out_items), "", "")
+    if cv.kind == VAL_STRING:
+        trimmed: str = nox.strings.trim(cv.s)
+        if len(trimmed) == 0:
+            return CoerceResult(True, make_array([]), "", "")
+        parts: list[str] = nox.strings.split(trimmed, ",")
+        out_items: list[ConfigValue] = []
+        idx: int = 0
+        while idx < len(parts):
+            p: str = nox.strings.trim(parts[idx])
+            out_items.append(make_string(p))
+            idx = idx + 1
+        return CoerceResult(True, make_array(out_items), "", "")
+    return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "expected list or comma-separated string")
+
+def coerce_value(cv: ConfigValue, target_type: int) -> CoerceResult:
+    if target_type == FIELD_TYPE_STRING:
+        return coerce_string(cv)
+    if target_type == FIELD_TYPE_INT:
+        return coerce_int(cv)
+    if target_type == FIELD_TYPE_FLOAT:
+        return coerce_float(cv)
+    if target_type == FIELD_TYPE_BOOL:
+        return coerce_bool(cv)
+    if target_type == FIELD_TYPE_STRING_LIST:
+        return coerce_string_list(cv)
+    return CoerceResult(False, make_missing(), ERR_CONFIG_TYPE_MISMATCH, "unknown target field type")

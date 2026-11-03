@@ -1,0 +1,62 @@
+# VAULT — MVP End-to-End Integration Test
+# Confirms Gate 3 (MVP Milestone)
+
+from nox.test import assert_eq_str, assert_eq_int, assert_true
+from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot
+from nox.os import set_var
+import nox.strings
+
+# 1. Declare schema
+schema: ConfigSchema = ConfigSchema()
+schema.add_string("APP_NAME", True, False, "", False, True)
+schema.add_int("PORT", True, True, 8080, True, 1, True, 65535, False)
+schema.add_string("DATABASE_URL", True, False, "", True, True) # Secret
+schema.add_bool("FEATURE_VERBOSE", False, True, False, False)
+schema.add_string_list("ALLOWED_ORIGINS", False, False)
+
+# 2. Set OS environment variables
+set_var("VAULT_LIVE_DB_URL", "postgres://admin:secret@db.prod.internal:5432/live")
+
+# Mapping
+allowed_env: list[str] = []
+allowed_env.append("VAULT_LIVE_DB_URL")
+
+env_mapping: dict[str, str] = {}
+env_mapping["VAULT_LIVE_DB_URL"] = "DATABASE_URL"
+
+# 3. Build snapshot using fluent ConfigBuilder
+builder: ConfigBuilder = ConfigBuilder()
+builder.with_dotenv("fixtures/dotenv/valid.env", False)
+builder.with_process_env(allowed_env, env_mapping)
+builder.with_override("PORT", "9090") # Runtime override wins over .env (8080)
+builder.with_override("ALLOWED_ORIGINS", "https://app.com, https://admin.app.com")
+builder.with_schema(schema)
+
+config: ConfigSnapshot = builder.build()
+
+# 4. Verify typed getters
+# APP_NAME loaded from fixtures/dotenv/valid.env
+assert_eq_str(config.get_string("APP_NAME"), "VaultDemo", "app name from dotenv")
+
+# PORT overridden by runtime override to 9090
+assert_eq_int(config.get_int("PORT"), 9090, "port from override")
+
+# DATABASE_URL loaded from process environment
+assert_eq_str(config.get_string("DATABASE_URL"), "postgres://admin:secret@db.prod.internal:5432/live", "db url from env")
+
+# FEATURE_VERBOSE resolved from schema default (false)
+assert_true(not config.get_bool("FEATURE_VERBOSE"), "feature verbose default false")
+
+# ALLOWED_ORIGINS coerced into list of strings
+origins: list[str] = config.get_list("ALLOWED_ORIGINS")
+assert_eq_int(len(origins), 2, "2 origins parsed")
+assert_eq_str(origins[0], "https://app.com", "origin 0")
+assert_eq_str(origins[1], "https://admin.app.com", "origin 1")
+
+# 5. Verify explain() does NOT expose the secret DATABASE_URL value
+explain_db: str = config.explain("DATABASE_URL")
+assert_true(nox.strings.contains(explain_db, "source_id='os:VAULT_LIVE_DB_URL'"), "explain must include source id")
+assert_true(nox.strings.contains(explain_db, "is_secret=true"), "explain must flag secret")
+assert_true(not nox.strings.contains(explain_db, "secret@db.prod.internal"), "explain must NEVER disclose secret value!")
+
+print("INTEGRATION_TEST: MVP PASS")
