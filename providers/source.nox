@@ -1,0 +1,41 @@
+# VAULT — Secret Provider Configuration Source Bridge
+# Module: providers.source
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, PRESENCE_SUPPLIED, make_string
+from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG_MISSING
+from sources.interface import ConfigSource
+from providers.interface import SecretProvider, SecretFetchResult
+from secrets.mark import SecretValue
+
+class SecretProviderSource(ConfigSource):
+    provider: SecretProvider
+    keys: list[str]
+    fail_closed: bool
+
+    def __init__(self: SecretProviderSource, provider: SecretProvider, keys: list[str], rank: int, profile: str, fail_closed: bool) -> None:
+        self.id = provider.id
+        self.kind = "secret_provider"
+        self.rank = rank
+        self.profile = profile
+        self.provider = provider
+        self.keys = keys
+        self.fail_closed = fail_closed
+
+    def load(self: SecretProviderSource) -> list[ConfigEntry]:
+        entries: list[ConfigEntry] = []
+        k_idx: int = 0
+        while k_idx < len(self.keys):
+            k: str = self.keys[k_idx]
+            res: SecretFetchResult = self.provider.get(k)
+            if res.found:
+                sec_val: SecretValue | None = res.val
+                raw: str = sec_val.reveal() if sec_val is not None else ""
+                origin: SourceOrigin = SourceOrigin(self.id, "secret_provider", self.profile, self.rank)
+                entry: ConfigEntry = ConfigEntry(k, make_string(raw), PRESENCE_SUPPLIED, origin, True, False)
+                entries.append(entry)
+            else:
+                if self.fail_closed and len(res.error_code) > 0 and res.error_code != ERR_CONFIG_MISSING:
+                    raise ConfigError(res.error_code, k, "provider failed while fetching secret: " + res.error_msg)
+            k_idx = k_idx + 1
+
+        return entries

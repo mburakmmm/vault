@@ -1,0 +1,41 @@
+# VAULT — In-Memory Secret Provider (Test Fake)
+# Module: providers.memory
+
+from core.errors import ERR_CONFIG_PROVIDER_UNAVAILABLE
+from providers.interface import SecretProvider, SecretFetchResult, ProviderHealth, make_fetch_success, make_fetch_not_found, make_fetch_error
+
+class MemorySecretProvider(SecretProvider):
+    secrets: dict[str, str]
+    is_healthy: bool
+    health_msg: str
+
+    def __init__(self: MemorySecretProvider, id: str) -> None:
+        self.id = id
+        self.provider_kind = "memory"
+        self.secrets = {}
+        self.is_healthy = True
+        self.health_msg = "healthy"
+
+    def set_secret(self: MemorySecretProvider, key: str, val: str) -> None:
+        self.secrets[key] = val
+
+    def set_unhealthy(self: MemorySecretProvider, msg: str) -> None:
+        self.is_healthy = False
+        self.health_msg = msg
+
+    def set_healthy(self: MemorySecretProvider) -> None:
+        self.is_healthy = True
+        self.health_msg = "healthy"
+
+    def get(self: MemorySecretProvider, key: str) -> SecretFetchResult:
+        if not self.is_healthy:
+            return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, self.health_msg, self.id)
+        if key in self.secrets:
+            return make_fetch_success(self.secrets[key], key, self.id)
+        return make_fetch_not_found(self.id)
+
+    def health(self: MemorySecretProvider) -> ProviderHealth:
+        return ProviderHealth(self.is_healthy, self.health_msg)
+
+    def close(self: MemorySecretProvider) -> None:
+        self.secrets = {}

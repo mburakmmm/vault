@@ -16,6 +16,8 @@ from schema.fields import ConfigSchema, Field
 from schema.validate import validate_entries, ValidationReport, SafeConfigDiagnostic
 from profiles.overlay import validate_profile_name, is_production_profile, profile_filename
 from interpolate.resolve import resolve_interpolations
+from providers.interface import SecretProvider
+from providers.source import SecretProviderSource
 
 class ConfigBuilder:
     sources: list[ConfigSource]
@@ -118,6 +120,11 @@ class ConfigBuilder:
         p_path: str = profile_filename(base_path, self.profile)
         ds: DotenvSource = DotenvSource(p_path, optional, 6, self.profile)
         self.sources.append(ds)
+        return self
+
+    def with_secret_provider(self: ConfigBuilder, provider: SecretProvider, keys: list[str], fail_closed: bool) -> ConfigBuilder:
+        src: SecretProviderSource = SecretProviderSource(provider, keys, 7, self.profile, fail_closed)
+        self.sources.append(src)
         return self
 
     def with_process_env(self: ConfigBuilder, allowed_keys: list[str], mapping: dict[str, str]) -> ConfigBuilder:

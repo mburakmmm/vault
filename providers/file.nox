@@ -1,0 +1,59 @@
+# VAULT — Root-Confined File Secret Provider
+# Module: providers.file
+
+from nox.fs import exists, is_file, metadata, FileMetadata
+from core.errors import ConfigError, ERR_CONFIG_SIZE_LIMIT, ERR_CONFIG_SOURCE_UNAVAILABLE
+from sources.files import check_path_confinement, read_bounded_file
+from providers.interface import SecretProvider, SecretFetchResult, ProviderHealth, make_fetch_success, make_fetch_not_found, make_fetch_error
+import nox.strings
+
+MAX_SECRET_FILE_SIZE: int = 65536 # 64 KiB ceiling for individual secret files
+
+class FileSecretProvider(SecretProvider):
+    allowed_root: str
+    key_to_path: dict[str, str]
+
+    def __init__(self: FileSecretProvider, allowed_root: str) -> None:
+        self.id = "file_secrets"
+        self.provider_kind = "file"
+        self.allowed_root = allowed_root
+        self.key_to_path = {}
+
+    def set_secret_file(self: FileSecretProvider, key: str, path: str) -> None:
+        self.key_to_path[key] = path
+
+    def get(self: FileSecretProvider, key: str) -> SecretFetchResult:
+        if key not in self.key_to_path:
+            return make_fetch_not_found(self.id)
+
+        target_path: str = self.key_to_path[key]
+
+        try:
+            # 1. Path confinement check
+            canon_path: str = check_path_confinement(target_path, self.allowed_root)
+
+            # 2. Existence and regular file check
+            if not exists(canon_path) or not is_file(canon_path):
+                return make_fetch_error(ERR_CONFIG_SOURCE_UNAVAILABLE, "secret file does not exist or is not a regular file", self.id)
+
+            # 3. Secret file size limit check (64 KiB)
+            meta: FileMetadata = metadata(canon_path)
+            if meta.size > MAX_SECRET_FILE_SIZE:
+                return make_fetch_error(ERR_CONFIG_SIZE_LIMIT, "secret file exceeds 64 KiB limit", self.id)
+
+            # 4. Safe read
+            raw_content: str = read_bounded_file(canon_path, self.allowed_root, False)
+            # Trim trailing whitespace/newlines per secret file convention
+            clean_val: str = nox.strings.trim(raw_content)
+            return make_fetch_success(clean_val, key, self.id)
+
+        except ConfigError as err:
+            return make_fetch_error(err.code, err.message, self.id)
+
+    def health(self: FileSecretProvider) -> ProviderHealth:
+        if len(self.allowed_root) > 0 and not exists(self.allowed_root):
+            return ProviderHealth(False, "allowed root directory does not exist")
+        return ProviderHealth(True, "file secret provider healthy")
+
+    def close(self: FileSecretProvider) -> None:
+        self.key_to_path = {}

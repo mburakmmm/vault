@@ -5,6 +5,19 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-03
+
+### Added
+- Pluggable secret provider interface and result contract (`providers/interface.nox`) with `SecretProvider`, `SecretFetchResult`, and `ProviderHealth`.
+- In-memory mock secret provider (`providers/memory.nox`) for deterministic testing and health reporting.
+- Allowlist-only environment secret provider (`providers/env.nox`) strictly restricting OS environment queries to authorized keys.
+- Root-confined file secret provider (`providers/file.nox`) with path confinement, directory traversal rejection (`FILE-01`), and 64 KiB size ceilings.
+- Configuration source bridge `SecretProviderSource` (`providers/source.nox`) binding providers at precedence rank 7 with automatic `is_secret = true` tagging.
+- `ConfigBuilder` extension `with_secret_provider(provider, keys, fail_closed)`.
+- Test fixtures in `fixtures/secrets_dummy/` (`db_pass.txt`, `api_key.txt`).
+- Test suite `tests/secret_provider_test.nox` covering memory, env, file providers, precedence rank 7, fail-closed handling, and zero-network isolation (**`PROVIDER-01`**).
+- Verified 100% green across both LLVM (`zig 0.17.0`) and QBE compiler backends.
+
 ## [0.6.0] - 2026-11-03 (Practical Package Milestone)
 
 ### Added

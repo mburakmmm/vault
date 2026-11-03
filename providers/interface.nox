@@ -1,0 +1,53 @@
+# VAULT — Secret Provider Interface and Result Model
+# Module: providers.interface
+
+from secrets.mark import SecretValue
+
+class ProviderHealth:
+    healthy: bool
+    message: str
+
+    def __init__(self: ProviderHealth, healthy: bool, message: str) -> None:
+        self.healthy = healthy
+        self.message = message
+
+class SecretFetchResult:
+    found: bool
+    val: SecretValue | None
+    source_id: str
+    error_code: str
+    error_msg: str
+
+    def __init__(self: SecretFetchResult, found: bool, val: SecretValue | None, source_id: str, error_code: str, error_msg: str) -> None:
+        self.found = found
+        self.val = val
+        self.source_id = source_id
+        self.error_code = error_code
+        self.error_msg = error_msg
+
+def make_fetch_success(val: str, key: str, source_id: str) -> SecretFetchResult:
+    sec: SecretValue = SecretValue(val, key)
+    return SecretFetchResult(True, sec, source_id, "", "")
+
+def make_fetch_not_found(source_id: str) -> SecretFetchResult:
+    return SecretFetchResult(False, None, source_id, "CONFIG_MISSING", "secret key not found")
+
+def make_fetch_error(code: str, msg: str, source_id: str) -> SecretFetchResult:
+    return SecretFetchResult(False, None, source_id, code, msg)
+
+class SecretProvider:
+    id: str
+    provider_kind: str
+
+    def __init__(self: SecretProvider, id: str, provider_kind: str) -> None:
+        self.id = id
+        self.provider_kind = provider_kind
+
+    def get(self: SecretProvider, key: str) -> SecretFetchResult:
+        return make_fetch_not_found(self.id)
+
+    def health(self: SecretProvider) -> ProviderHealth:
+        return ProviderHealth(True, "ok")
+
+    def close(self: SecretProvider) -> None:
+        pass

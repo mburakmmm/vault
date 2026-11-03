@@ -11,7 +11,7 @@ from sources.json import JsonSource
 from sources.toml import TomlSource
 from sources.yaml import YamlSource
 from core.types import ConfigValue, ConfigEntry, SourceOrigin, make_string, make_int, make_float, make_bool, make_null, make_missing, make_array, make_object, PRESENCE_MISSING, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
-from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_DUPLICATE_KEY, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SIZE_LIMIT, ERR_CONFIG_INTERPOLATION_CYCLE, ERR_CONFIG_PARSE_ERROR
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_DUPLICATE_KEY, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SIZE_LIMIT, ERR_CONFIG_INTERPOLATION_CYCLE, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_PROVIDER_UNAVAILABLE
 from core.merge import merge_sources
 from core.snapshot import ConfigSnapshot
 from core.builder import ConfigBuilder
@@ -23,8 +23,13 @@ from interpolate.resolve import resolve_interpolations
 from secrets.mark import SecretValue, REDACTED_LABEL
 from secrets.redact import redact_string, to_redacted_json
 from secrets.cache import SecretCache, CachedSecret
+from providers.interface import SecretProvider, SecretFetchResult, ProviderHealth, make_fetch_success, make_fetch_not_found, make_fetch_error
+from providers.memory import MemorySecretProvider
+from providers.env import EnvSecretProvider
+from providers.file import FileSecretProvider
+from providers.source import SecretProviderSource
 
-VERSION: str = "0.6.0"
+VERSION: str = "0.7.0"
 
 def version() -> str:
     return VERSION

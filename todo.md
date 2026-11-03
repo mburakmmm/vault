@@ -223,22 +223,23 @@
 
 ---
 
-### [ ] Sürüm v0.7.0 — Faz 7: Yerel Sır Sağlayıcıları (Secret Providers)
+### [x] Sürüm v0.7.0 — Faz 7: Yerel Sır Sağlayıcıları (Secret Providers)
 > **Hedef:** Harici sır depoları için eklenebilir arayüz ve yerel sağlayıcı adaptörlerini sunmak.
 
-- [ ] **7.1 Sağlayıcı Sözleşmesi (`providers/interface.nox`)**
-  - [ ] `SecretProvider` arayüzü (`id`, `get(key)`, `health()`, `close()`).
-  - [ ] `SecretFetchResult` yapısı.
-- [ ] **7.2 Yerel Sağlayıcılar (`providers/env.nox`, `providers/file.nox`, `memory.nox`)**
-  - [ ] `EnvSecretProvider`: Açıkça izin verilen ortam anahtarları.
-  - [ ] `FileSecretProvider`: Sınırlandırılmış, kök dizin korumalı sır dosyaları okuyucusu.
-  - [ ] `MemorySecretProvider`: Test amaçlı sahte sağlayıcı.
-- [ ] **7.3 Hata Davranışları (`PROVIDER-01`, `PROVIDER-03`)**
-  - [ ] Sağlayıcıya erişilemediğinde fail-closed davranışı (`CONFIG_PROVIDER_UNAVAILABLE`).
-  - [ ] İzin verilmeyen ağ çağrısı yapılmaması (`PROVIDER-01`).
-- [ ] **7.4 Testler (`tests/secret_provider_test.nox`)**
-  - [ ] Yerel dosya ve env sır sağlayıcı testleri.
-  - [ ] **Kabul Kapısı (Gate 7):** Sır sağlayıcıları izole ve yapılandırılabilir olmalıdır.
+- [x] **7.1 Sağlayıcı Sözleşmesi (`providers/interface.nox`)**
+  - [x] `SecretProvider` arayüzü (`id`, `get(key)`, `health()`, `close()`).
+  - [x] `SecretFetchResult` yapısı.
+- [x] **7.2 Yerel Sağlayıcılar (`providers/env.nox`, `providers/file.nox`, `providers/memory.nox`, `providers/source.nox`)**
+  - [x] `EnvSecretProvider`: Açıkça izin verilen ortam anahtarları.
+  - [x] `FileSecretProvider`: Sınırlandırılmış, kök dizin korumalı sır dosyaları okuyucusu.
+  - [x] `MemorySecretProvider`: Test amaçlı sahte sağlayıcı.
+  - [x] `SecretProviderSource`: Sağlayıcıların konfigürasyon öncelik sırasına (rank 7) bağlanması.
+- [x] **7.3 Hata Davranışları (`PROVIDER-01`, `PROVIDER-03`)**
+  - [x] Sağlayıcıya erişilemediğinde fail-closed davranışı (`CONFIG_PROVIDER_UNAVAILABLE`).
+  - [x] İzin verilmeyen ağ çağrısı yapılmaması (`PROVIDER-01`).
+- [x] **7.4 Testler (`tests/secret_provider_test.nox`)**
+  - [x] Yerel dosya, env ve memory sır sağlayıcı testleri.
+  - [x] **Kabul Kapısı (Gate 7):** Sır sağlayıcıları izole ve yapılandırılabilir olmalıdır. (LLVM ve QBE onaylı)
 
 ---
 
