@@ -1,0 +1,86 @@
+# VAULT — Deterministic Configuration Merge Engine
+# Module: core.merge
+
+from core.types import ConfigEntry, ConfigValue, VAL_OBJECT, VAL_ARRAY, SourceOrigin, make_object
+from core.errors import ConfigError, ERR_CONFIG_TYPE_MISMATCH
+from sources.interface import ConfigSource
+
+def _sort_sources(sources: list[ConfigSource]) -> list[ConfigSource]:
+    result: list[ConfigSource] = []
+    idx: int = 0
+    while idx < len(sources):
+        result.append(sources[idx])
+        idx = idx + 1
+
+    n: int = len(result)
+    i: int = 0
+    while i < n:
+        j: int = 0
+        while j < n - i - 1:
+            if result[j].rank > result[j + 1].rank:
+                temp: ConfigSource = result[j]
+                result[j] = result[j + 1]
+                result[j + 1] = temp
+            j = j + 1
+        i = i + 1
+
+    return result
+
+def _merge_objects(base_obj: dict[str, ConfigValue], incoming_obj: dict[str, ConfigValue], prefix: str) -> dict[str, ConfigValue]:
+    new_obj: dict[str, ConfigValue] = {}
+    for k in base_obj:
+        new_obj[k] = base_obj[k]
+
+    for k in incoming_obj:
+        if k in new_obj:
+            b_val: ConfigValue = new_obj[k]
+            inc_val: ConfigValue = incoming_obj[k]
+            if b_val.kind == VAL_OBJECT and inc_val.kind == VAL_OBJECT:
+                merged_child: dict[str, ConfigValue] = _merge_objects(b_val.obj, inc_val.obj, prefix + "." + k)
+                new_obj[k] = make_object(merged_child)
+            else:
+                is_b_container: bool = b_val.kind == VAL_OBJECT or b_val.kind == VAL_ARRAY
+                is_inc_container: bool = inc_val.kind == VAL_OBJECT or inc_val.kind == VAL_ARRAY
+                if is_b_container != is_inc_container:
+                    raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, prefix + "." + k, "cannot merge container with scalar")
+                new_obj[k] = inc_val
+        else:
+            new_obj[k] = incoming_obj[k]
+
+    return new_obj
+
+def merge_sources(sources: list[ConfigSource]) -> dict[str, ConfigEntry]:
+    sorted_sources: list[ConfigSource] = _sort_sources(sources)
+    merged: dict[str, ConfigEntry] = {}
+
+    s_idx: int = 0
+    while s_idx < len(sorted_sources):
+        src: ConfigSource = sorted_sources[s_idx]
+        entries: list[ConfigEntry] = src.load()
+
+        e_idx: int = 0
+        while e_idx < len(entries):
+            e: ConfigEntry = entries[e_idx]
+            k: str = e.key
+
+            if k in merged:
+                old_e: ConfigEntry = merged[k]
+                if old_e.val.kind == VAL_OBJECT and e.val.kind == VAL_OBJECT:
+                    merged_child_map: dict[str, ConfigValue] = _merge_objects(old_e.val.obj, e.val.obj, k)
+                    combined_val: ConfigValue = make_object(merged_child_map)
+                    secret_flag: bool = old_e.is_secret or e.is_secret
+                    merged[k] = ConfigEntry(k, combined_val, e.presence, e.origin, secret_flag, False)
+                else:
+                    is_old_cont: bool = old_e.val.kind == VAL_OBJECT or old_e.val.kind == VAL_ARRAY
+                    is_new_cont: bool = e.val.kind == VAL_OBJECT or e.val.kind == VAL_ARRAY
+                    if is_old_cont != is_new_cont:
+                        raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, k, "conflicting types between container and scalar")
+                    merged[k] = e
+            else:
+                merged[k] = e
+
+            e_idx = e_idx + 1
+
+        s_idx = s_idx + 1
+
+    return merged

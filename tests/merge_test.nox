@@ -1,0 +1,170 @@
+# Test suite for Deterministic Merging and Snapshot Precedence
+# Regression scenarios: MERGE-01, MERGE-02, MERGE-03, MERGE-04
+
+from nox.test import assert_eq_str, assert_eq_int, assert_true
+from core.types import ConfigEntry, ConfigValue, make_string, make_int, make_null, make_object, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
+from core.errors import ConfigError, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED
+from core.merge import merge_sources
+from core.snapshot import ConfigSnapshot
+from sources.interface import ConfigSource
+from sources.memory import MemorySource
+import nox.strings
+
+# -------------------------------------------------------------------------
+# Test 1: Multi-Source Precedence (MERGE-01)
+# -------------------------------------------------------------------------
+# Sources:
+# Defaults (rank 2): PORT=8000, HOST=localhost
+# Dotenv (rank 5): PORT=8080, DB=postgres
+# ProcessEnv (rank 8): PORT=9000
+# Override (rank 9): PORT=9999
+
+src_defaults: MemorySource = MemorySource("defaults", 2, "base", True)
+src_defaults.set_string("PORT", "8000")
+src_defaults.set_string("HOST", "localhost")
+
+src_dotenv: MemorySource = MemorySource("dotenv", 5, "base", False)
+src_dotenv.set_string("PORT", "8080")
+src_dotenv.set_string("DB", "postgres")
+
+src_env: MemorySource = MemorySource("os_env", 8, "base", False)
+src_env.set_string("PORT", "9000")
+
+src_override: MemorySource = MemorySource("override", 9, "base", False)
+src_override.set_string("PORT", "9999")
+
+sources_all: list[ConfigSource] = []
+sources_all.append(src_override)
+sources_all.append(src_defaults)
+sources_all.append(src_env)
+sources_all.append(src_dotenv)
+
+merged_all: dict[str, ConfigEntry] = merge_sources(sources_all)
+snap_all: ConfigSnapshot = ConfigSnapshot(merged_all, "v1")
+
+assert_eq_str(snap_all.get_string("PORT"), "9999", "override (rank 9) must win")
+assert_eq_str(snap_all.get_string("HOST"), "localhost", "host from defaults")
+assert_eq_str(snap_all.get_string("DB"), "postgres", "db from dotenv")
+
+# Remove rank 9 override -> rank 8 (os_env) should win
+sources_no_override: list[ConfigSource] = []
+sources_no_override.append(src_defaults)
+sources_no_override.append(src_env)
+sources_no_override.append(src_dotenv)
+
+merged_no_override: dict[str, ConfigEntry] = merge_sources(sources_no_override)
+snap_no_override: ConfigSnapshot = ConfigSnapshot(merged_no_override, "v2")
+assert_eq_str(snap_no_override.get_string("PORT"), "9000", "os_env (rank 8) must win when rank 9 removed")
+
+# Remove rank 8 os_env -> rank 5 (dotenv) should win
+sources_no_env: list[ConfigSource] = []
+sources_no_env.append(src_defaults)
+sources_no_env.append(src_dotenv)
+
+merged_no_env: dict[str, ConfigEntry] = merge_sources(sources_no_env)
+snap_no_env: ConfigSnapshot = ConfigSnapshot(merged_no_env, "v3")
+assert_eq_str(snap_no_env.get_string("PORT"), "8080", "dotenv (rank 5) must win when rank 8 removed")
+
+# Remove rank 5 dotenv -> rank 2 (defaults) should win
+sources_defaults_only: list[ConfigSource] = []
+sources_defaults_only.append(src_defaults)
+
+merged_defaults_only: dict[str, ConfigEntry] = merge_sources(sources_defaults_only)
+snap_defaults: ConfigSnapshot = ConfigSnapshot(merged_defaults_only, "v4")
+assert_eq_str(snap_defaults.get_string("PORT"), "8000", "defaults (rank 2) must win when alone")
+
+# -------------------------------------------------------------------------
+# Test 2: Recursive Object Merge (MERGE-03)
+# -------------------------------------------------------------------------
+obj_base: dict[str, ConfigValue] = {}
+obj_base["host"] = make_string("127.0.0.1")
+obj_base["port"] = make_string("8080")
+
+src_base_obj: MemorySource = MemorySource("base_cfg", 3, "base", False)
+src_base_obj.set("server", make_object(obj_base))
+
+obj_inc: dict[str, ConfigValue] = {}
+obj_inc["port"] = make_string("9000")
+obj_inc["timeout"] = make_string("30")
+
+src_inc_obj: MemorySource = MemorySource("inc_cfg", 4, "base", False)
+src_inc_obj.set("server", make_object(obj_inc))
+
+obj_sources: list[ConfigSource] = []
+obj_sources.append(src_base_obj)
+obj_sources.append(src_inc_obj)
+
+merged_objs: dict[str, ConfigEntry] = merge_sources(obj_sources)
+server_entry: ConfigEntry = merged_objs["server"]
+server_map: dict[str, ConfigValue] = server_entry.val.obj
+
+assert_eq_str(server_map["host"].s, "127.0.0.1", "host preserved from base")
+assert_eq_str(server_map["port"].s, "9000", "port overridden by incoming")
+assert_eq_str(server_map["timeout"].s, "30", "timeout added by incoming")
+
+# -------------------------------------------------------------------------
+# Test 3: Container vs Scalar Conflict Rejection (MERGE-02)
+# -------------------------------------------------------------------------
+src_scalar: MemorySource = MemorySource("scalar_src", 1, "base", False)
+src_scalar.set_string("target", "scalar_val")
+
+src_container: MemorySource = MemorySource("cont_src", 2, "base", False)
+cont_map: dict[str, ConfigValue] = {}
+cont_map["child"] = make_string("v")
+src_container.set("target", make_object(cont_map))
+
+conflict_sources: list[ConfigSource] = []
+conflict_sources.append(src_scalar)
+conflict_sources.append(src_container)
+
+conflict_caught: bool = False
+try:
+    merge_sources(conflict_sources)
+except ConfigError as e:
+    conflict_caught = True
+    assert_eq_str(e.code, ERR_CONFIG_TYPE_MISMATCH, "conflict error code")
+except Exception:
+    pass
+
+assert_true(conflict_caught, "merging container over scalar must fail with CONFIG_TYPE_MISMATCH")
+
+# -------------------------------------------------------------------------
+# Test 4: Missing, Null and Empty Distinction (MERGE-04)
+# -------------------------------------------------------------------------
+src_states: MemorySource = MemorySource("states_src", 1, "base", False)
+src_states.set("key_null", make_null())
+src_states.set_string("key_empty", "")
+src_states.set_string("key_supplied", "valid")
+
+states_sources: list[ConfigSource] = []
+states_sources.append(src_states)
+snap_states: ConfigSnapshot = ConfigSnapshot(merge_sources(states_sources), "v1")
+
+assert_true(snap_states.is_null("key_null"), "key_null must be null")
+assert_true(not snap_states.is_null("key_empty"), "key_empty is not null")
+assert_true(not snap_states.is_null("key_missing"), "key_missing is not null")
+
+assert_true(snap_states.has("key_empty"), "key_empty is present")
+assert_true(not snap_states.has("key_missing"), "key_missing is absent")
+assert_eq_str(snap_states.get_string("key_empty"), "", "key_empty value is empty string")
+
+null_get_caught: bool = False
+try:
+    snap_states.get_string("key_null")
+except ConfigError as e:
+    null_get_caught = True
+    assert_eq_str(e.code, ERR_CONFIG_NULL_NOT_ALLOWED, "null get string error code")
+except Exception:
+    pass
+assert_true(null_get_caught, "get_string on null key must fail closed")
+
+# -------------------------------------------------------------------------
+# Test 5: Explain Functionality & Safe Provenance
+# -------------------------------------------------------------------------
+exp: str = snap_all.explain("PORT")
+assert_true(nox.strings.contains(exp, "rank=9"), "explain must include rank 9")
+assert_true(nox.strings.contains(exp, "source_id='override'"), "explain must include source id")
+# Verify secret sentinel is NOT in explain
+assert_true(not nox.strings.contains(exp, "9999"), "explain must NOT include raw values")
+
+print("MERGE_TEST: ALL PASS")

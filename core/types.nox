@@ -1,0 +1,91 @@
+# VAULT — Core Types and Value Model
+# Module: core.types
+
+# Value Kinds
+VAL_MISSING: int = 0
+VAL_NULL: int = 1
+VAL_STRING: int = 2
+VAL_INTEGER: int = 3
+VAL_FLOAT: int = 4
+VAL_BOOLEAN: int = 5
+VAL_ARRAY: int = 6
+VAL_OBJECT: int = 7
+
+# Presence States
+PRESENCE_MISSING: int = 0
+PRESENCE_NULL: int = 1
+PRESENCE_EMPTY: int = 2
+PRESENCE_SUPPLIED: int = 3
+
+class ConfigValue:
+    kind: int
+    s: str
+    i: int
+    f: float
+    b: bool
+    arr: list[ConfigValue]
+    obj: dict[str, ConfigValue]
+
+    def __init__(self: ConfigValue, kind: int, s: str, i: int, f: float, b: bool, arr: list[ConfigValue], obj: dict[str, ConfigValue]) -> None:
+        self.kind = kind
+        self.s = s
+        self.i = i
+        self.f = f
+        self.b = b
+        self.arr = arr
+        self.obj = obj
+
+def make_missing() -> ConfigValue:
+    return ConfigValue(VAL_MISSING, "", 0, 0.0, False, [], {})
+
+def make_null() -> ConfigValue:
+    return ConfigValue(VAL_NULL, "", 0, 0.0, False, [], {})
+
+def make_string(s: str) -> ConfigValue:
+    return ConfigValue(VAL_STRING, s, 0, 0.0, False, [], {})
+
+def make_int(i: int) -> ConfigValue:
+    return ConfigValue(VAL_INTEGER, "", i, 0.0, False, [], {})
+
+def make_float(f: float) -> ConfigValue:
+    return ConfigValue(VAL_FLOAT, "", 0, f, False, [], {})
+
+def make_bool(b: bool) -> ConfigValue:
+    return ConfigValue(VAL_BOOLEAN, "", 0, 0.0, b, [], {})
+
+def make_array(arr: list[ConfigValue]) -> ConfigValue:
+    return ConfigValue(VAL_ARRAY, "", 0, 0.0, False, arr, {})
+
+def make_object(obj: dict[str, ConfigValue]) -> ConfigValue:
+    return ConfigValue(VAL_OBJECT, "", 0, 0.0, False, [], obj)
+
+class SourceOrigin:
+    source_id: str
+    source_kind: str
+    profile: str
+    precedence_rank: int
+
+    def __init__(self: SourceOrigin, source_id: str, source_kind: str, profile: str, precedence_rank: int) -> None:
+        self.source_id = source_id
+        self.source_kind = source_kind
+        self.profile = profile
+        self.precedence_rank = precedence_rank
+
+    def to_string(self: SourceOrigin) -> str:
+        return "kind=" + self.source_kind + ", id='" + self.source_id + "', profile=" + self.profile + ", rank=" + str(self.precedence_rank)
+
+class ConfigEntry:
+    key: str
+    val: ConfigValue
+    presence: int
+    origin: SourceOrigin
+    is_secret: bool
+    is_default: bool
+
+    def __init__(self: ConfigEntry, key: str, val: ConfigValue, presence: int, origin: SourceOrigin, is_secret: bool, is_default: bool) -> None:
+        self.key = key
+        self.val = val
+        self.presence = presence
+        self.origin = origin
+        self.is_secret = is_secret
+        self.is_default = is_default

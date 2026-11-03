@@ -24,7 +24,7 @@
 | :--- | :--- | :--- | :--- |
 | **v0.1.0** | **Faz 0** | Yetenek Denetimi (Capability Audit), NOX Probları ve İskelet Paket | [x] Tamamlandı |
 | **v0.2.0** | **Faz 1** | Saf (Pure) & Bounded `.env` Ayrıştırıcı (Parser & Tokenizer) | [x] Tamamlandı |
-| **v0.2.5** | **Faz 2** | Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik | [ ] Beklemede |
+| **v0.2.5** | **Faz 2** | Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik | [x] Tamamlandı |
 | **v0.3.0** | **Faz 3** | Tipli Şema (Typed Schema) & Toplu Güvenli Doğrulama (**MVP Sürümü**) | [ ] Beklemede |
 | **v0.4.0** | **Faz 4** | Yapılandırılmış Kaynaklar (JSON, TOML, YAML Köprüleri) & Kök Korumalı Dosyalar | [ ] Beklemede |
 | **v0.5.0** | **Faz 5** | Profiller (Profiles), Değişken İnterpolasyonu & Sır Bulaşması (Secret Taint) | [ ] Beklemede |
@@ -98,33 +98,33 @@
 
 ---
 
-### [ ] Sürüm v0.2.5 — Faz 2: Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik
+### [x] Sürüm v0.2.5 — Faz 2: Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik
 > **Hedef:** Çoklu kaynakları birleştiren, deterministik öncelik kurallarını işleten ve izlenebilirlik sağlayan çekirdeği kurmak.
 
-- [ ] **2.1 Çekirdek Tipler ve Hatalar (`core/types.nox`, `core/errors.nox`)**
-  - [ ] `ConfigValue`: `String`, `Integer`, `Float`, `Boolean`, `Array`, `Object`, `Null`, `Missing`.
-  - [ ] `PresenceState`: `Missing`, `NullValue`, `EmptyString`, `SuppliedValue`.
-  - [ ] `SourceOrigin`: Kaynak türü (`Defaults`, `Memory`, `File`, `Dotenv`, `Env`, `Override`), kaynak ID'si, profil.
-  - [ ] `ConfigEntry`: Değer, varlık durumu, kaynak bilgisi, sır bayrağı (`is_secret`), öncelik sırası.
-  - [ ] Güvenli hata tipleri ve standart kodlar (`CONFIG_MISSING`, `CONFIG_DUPLICATE_KEY`, vb.).
-- [ ] **2.2 Kaynak Soyutlamaları (`sources/interface.nox`, `sources/memory.nox`)**
-  - [ ] `ConfigSource` arayüzü/sözleşmesi.
-  - [ ] `MemorySource`: Bellek içi test geçersiz kılmaları ve varsayılanlar.
-  - [ ] `DotenvSource (`env/source.nox`): Dosya boyutu denetimli `.env` okuyucu.
-  - [ ] `ProcessEnvSource` (`env/process.nox`): Yalnızca izin verilen/şemada kayıtlı anahtarları `nox.os.getenv` ile okur.
-- [ ] **2.3 Öncelik ve Birleştirme Motoru (`core/merge.nox`, `core/snapshot.nox`)**
-  - [ ] Standart öncelik sırası: Defaults -> Base File -> Profile File -> `.env` -> `.env.<profile>` -> Process Env -> Runtime Overrides.
-  - [ ] Nesneler için derin/özyinelemeli (recursive) birleştirme, diziler için yer değiştirme (replace).
-  - [ ] Tipler arası çakışmada açık hata verme (`CONFIG_TYPE_MISMATCH`).
-  - [ ] `ConfigSnapshot`: Dışarıya değişmez (immutable) ve yalnızca okunabilir nesne sunumu.
-  - [ ] Güvenli kaynak izleme: `snapshot.explain(key)` (asla sır değeri ifşa etmez).
-- [ ] **2.4 Testler (`tests/merge_test.nox`, `tests/env_process_test.nox`)**
-  - [ ] Çok kaynaklı öncelik doğrulama testleri (`MERGE-01`).
-  - [ ] Üst kaynak geçersiz olduğunda alt kaynağa sessizce düşmeme testi (`MERGE-02`).
-  - [ ] Nesne ve dizi birleştirme testleri (`MERGE-03`).
-  - [ ] Missing/Null/Empty ayrım testleri (`MERGE-04`, `ENV-01`, `ENV-02`).
-  - [ ] İzin verilmeyen ortam değişkenlerinin taranmaması testi.
-  - [ ] **Kabul Kapısı (Gate 2):** Kaynak sıralaması deterministik olmalı, yayınlanan snapshot dondurulmuş (immutable) olmalıdır.
+- [x] **2.1 Çekirdek Tipler ve Hatalar (`core/types.nox`, `core/errors.nox`)**
+  - [x] `ConfigValue`: `String`, `Integer`, `Float`, `Boolean`, `Array`, `Object`, `Null`, `Missing`.
+  - [x] `PresenceState`: `Missing`, `NullValue`, `EmptyString`, `SuppliedValue`.
+  - [x] `SourceOrigin`: Kaynak türü (`Defaults`, `Memory`, `File`, `Dotenv`, `Env`, `Override`), kaynak ID'si, profil.
+  - [x] `ConfigEntry`: Değer, varlık durumu, kaynak bilgisi, sır bayrağı (`is_secret`), öncelik sırası.
+  - [x] Güvenli hata tipleri ve standart kodlar (`CONFIG_MISSING`, `CONFIG_DUPLICATE_KEY`, vb.).
+- [x] **2.2 Kaynak Soyutlamaları (`sources/interface.nox`, `sources/memory.nox`)**
+  - [x] `ConfigSource` arayüzü/sözleşmesi.
+  - [x] `MemorySource`: Bellek içi test geçersiz kılmaları ve varsayılanlar.
+  - [x] `DotenvSource (`env/source.nox`): Dosya boyutu denetimli `.env` okuyucu.
+  - [x] `ProcessEnvSource` (`env/process.nox`): Yalnızca izin verilen/şemada kayıtlı anahtarları `nox.os.getenv` ile okur.
+- [x] **2.3 Öncelik ve Birleştirme Motoru (`core/merge.nox`, `core/snapshot.nox`)**
+  - [x] Standart öncelik sırası: Defaults -> Base File -> Profile File -> `.env` -> `.env.<profile>` -> Process Env -> Runtime Overrides.
+  - [x] Nesneler için derin/özyinelemeli (recursive) birleştirme, diziler için yer değiştirme (replace).
+  - [x] Tipler arası çakışmada açık hata verme (`CONFIG_TYPE_MISMATCH`).
+  - [x] `ConfigSnapshot`: Dışarıya değişmez (immutable) ve yalnızca okunabilir nesne sunumu.
+  - [x] Güvenli kaynak izleme: `snapshot.explain(key)` (asla sır değeri ifşa etmez).
+- [x] **2.4 Testler (`tests/merge_test.nox`, `tests/env_process_test.nox`)**
+  - [x] Çok kaynaklı öncelik doğrulama testleri (`MERGE-01`).
+  - [x] Üst kaynak geçersiz olduğunda alt kaynağa sessizce düşmeme testi (`MERGE-02`).
+  - [x] Nesne ve dizi birleştirme testleri (`MERGE-03`).
+  - [x] Missing/Null/Empty ayrım testleri (`MERGE-04`, `ENV-01`, `ENV-02`).
+  - [x] İzin verilmeyen ortam değişkenlerinin taranmaması testi.
+  - [x] **Kabul Kapısı (Gate 2):** Kaynak sıralaması deterministik olmalı, yayınlanan snapshot dondurulmuş (immutable) olmalıdır.
 
 ---
 

@@ -1,0 +1,20 @@
+# VAULT — Configuration Source Interface
+# Module: sources.interface
+
+from core.types import ConfigEntry, SourceOrigin
+
+class ConfigSource:
+    id: str
+    kind: str
+    rank: int
+    profile: str
+
+    def __init__(self: ConfigSource, id: str, kind: str, rank: int, profile: str) -> None:
+        self.id = id
+        self.kind = kind
+        self.rank = rank
+        self.profile = profile
+
+    def load(self: ConfigSource) -> list[ConfigEntry]:
+        empty_entries: list[ConfigEntry] = []
+        return empty_entries

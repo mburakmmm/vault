@@ -1,0 +1,48 @@
+# VAULT — Allowlist-Only Process Environment Source
+# Module: env.process
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, PRESENCE_SUPPLIED, PRESENCE_EMPTY, make_string
+from sources.interface import ConfigSource
+from nox.os import getenv, OsError
+
+class ProcessEnvSource(ConfigSource):
+    allowed_keys: list[str]
+    key_mapping: dict[str, str]
+
+    def __init__(self: ProcessEnvSource, allowed_keys: list[str], key_mapping: dict[str, str], rank: int, profile: str) -> None:
+        self.id = "os_env"
+        self.kind = "env"
+        self.rank = rank
+        self.profile = profile
+        self.allowed_keys = allowed_keys
+        self.key_mapping = key_mapping
+
+    def load(self: ProcessEnvSource) -> list[ConfigEntry]:
+        entries: list[ConfigEntry] = []
+        idx: int = 0
+        while idx < len(self.allowed_keys):
+            env_name: str = self.allowed_keys[idx]
+            raw_val: str = ""
+            found: bool = False
+            try:
+                raw_val = getenv(env_name)
+                found = True
+            except OsError:
+                found = False
+
+            if found:
+                canonical_key: str = env_name
+                if env_name in self.key_mapping:
+                    canonical_key = self.key_mapping[env_name]
+
+                presence: int = PRESENCE_SUPPLIED
+                if len(raw_val) == 0:
+                    presence = PRESENCE_EMPTY
+
+                origin: SourceOrigin = SourceOrigin("os:" + env_name, "env", self.profile, self.rank)
+                entry: ConfigEntry = ConfigEntry(canonical_key, make_string(raw_val), presence, origin, False, False)
+                entries.append(entry)
+
+            idx = idx + 1
+
+        return entries

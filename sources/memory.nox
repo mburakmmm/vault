@@ -1,0 +1,35 @@
+# VAULT — In-Memory Configuration Source
+# Module: sources.memory
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, PRESENCE_SUPPLIED, PRESENCE_EMPTY, make_string
+from sources.interface import ConfigSource
+
+class MemorySource(ConfigSource):
+    entries: list[ConfigEntry]
+    is_default: bool
+
+    def __init__(self: MemorySource, id: str, rank: int, profile: str, is_default: bool) -> None:
+        self.id = id
+        self.kind = "memory"
+        self.rank = rank
+        self.profile = profile
+        self.is_default = is_default
+        self.entries = []
+
+    def set(self: MemorySource, key: str, val: ConfigValue) -> None:
+        presence: int = PRESENCE_SUPPLIED
+        if val.kind == 1: # VAL_NULL
+            presence = PRESENCE_NULL
+        elif val.kind == 2 and len(val.s) == 0: # Empty string
+            presence = PRESENCE_EMPTY
+        elif val.kind == 0: # VAL_MISSING
+            presence = PRESENCE_MISSING
+        origin: SourceOrigin = SourceOrigin(self.id, self.kind, self.profile, self.rank)
+        entry: ConfigEntry = ConfigEntry(key, val, presence, origin, False, self.is_default)
+        self.entries.append(entry)
+
+    def set_string(self: MemorySource, key: str, val: str) -> None:
+        self.set(key, make_string(val))
+
+    def load(self: MemorySource) -> list[ConfigEntry]:
+        return self.entries

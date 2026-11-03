@@ -5,6 +5,19 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-11-03
+
+### Added
+- Core value models and presence states (`ConfigValue`, `SourceOrigin`, `ConfigEntry`, `PRESENCE_MISSING`, `PRESENCE_NULL`, `PRESENCE_EMPTY`, `PRESENCE_SUPPLIED`).
+- Standard safe configuration error kinds (`core/errors.nox`).
+- Source abstractions (`sources/interface.nox`, `sources/memory.nox`).
+- Bounded file dotenv loader (`env/source.nox`) with 1 MiB size verification.
+- Allowlist-only process environment source (`env/process.nox`) using explicit keys and `nox.os.getenv`.
+- Deterministic multi-source precedence and recursive object merging (`core/merge.nox`).
+- Immutable published configuration snapshot (`core/snapshot.nox`) with safe non-secret `explain(key)`.
+- Architectural Decision Record `docs/adr/0002-source-precedence.md`.
+- Comprehensive test suites `tests/env_process_test.nox` and `tests/merge_test.nox` covering regression scenarios `MERGE-01` to `MERGE-04` and `ENV-01` to `ENV-02`.
+
 ## [0.2.0] - 2026-11-03
 
 ### Added

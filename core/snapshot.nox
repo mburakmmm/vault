@@ -1,0 +1,58 @@
+# VAULT — Immutable Config Snapshot
+# Module: core.snapshot
+
+from core.types import ConfigEntry, ConfigValue, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, PRESENCE_NULL, PRESENCE_MISSING
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH
+
+class ConfigSnapshot:
+    entries: dict[str, ConfigEntry]
+    snapshot_version: str
+
+    def __init__(self: ConfigSnapshot, entries: dict[str, ConfigEntry], version: str) -> None:
+        self.entries = entries
+        self.snapshot_version = version
+
+    def has(self: ConfigSnapshot, key: str) -> bool:
+        return key in self.entries
+
+    def is_null(self: ConfigSnapshot, key: str) -> bool:
+        if key not in self.entries:
+            return False
+        return self.entries[key].presence == PRESENCE_NULL
+
+    def get_string(self: ConfigSnapshot, key: str) -> str:
+        if key not in self.entries:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
+
+        e: ConfigEntry = self.entries[key]
+        if e.presence == PRESENCE_NULL:
+            raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
+
+        v: ConfigValue = e.val
+        if v.kind == VAL_STRING:
+            return v.s
+        if v.kind == VAL_INTEGER:
+            return str(v.i)
+        if v.kind == VAL_BOOLEAN:
+            if v.b:
+                return "true"
+            return "false"
+        if v.kind == VAL_FLOAT:
+            return str(v.f)
+
+        raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, key, "cannot convert structured container to string")
+
+    def explain(self: ConfigSnapshot, key: str) -> str:
+        if key not in self.entries:
+            return "key='" + key + "': missing (not present in any source)"
+
+        e: ConfigEntry = self.entries[key]
+        secret_str: str = "false"
+        if e.is_secret:
+            secret_str = "true"
+
+        # Notice: value is NEVER included in explain!
+        return "key='" + key + "', presence=" + str(e.presence) + ", source_kind=" + e.origin.source_kind + ", source_id='" + e.origin.source_id + "', rank=" + str(e.origin.precedence_rank) + ", is_secret=" + secret_str
+
+    def version(self: ConfigSnapshot) -> str:
+        return self.snapshot_version

@@ -1,0 +1,30 @@
+# VAULT — Safe Error Definitions
+# Module: core.errors
+
+# Standard Stable Error Codes (as specified in AGENTS.md §8)
+ERR_CONFIG_MISSING: str = "CONFIG_MISSING"
+ERR_CONFIG_NULL_NOT_ALLOWED: str = "CONFIG_NULL_NOT_ALLOWED"
+ERR_CONFIG_EMPTY_NOT_ALLOWED: str = "CONFIG_EMPTY_NOT_ALLOWED"
+ERR_CONFIG_TYPE_MISMATCH: str = "CONFIG_TYPE_MISMATCH"
+ERR_CONFIG_OUT_OF_RANGE: str = "CONFIG_OUT_OF_RANGE"
+ERR_CONFIG_DUPLICATE_KEY: str = "CONFIG_DUPLICATE_KEY"
+ERR_CONFIG_SOURCE_UNAVAILABLE: str = "CONFIG_SOURCE_UNAVAILABLE"
+ERR_CONFIG_PARSE_ERROR: str = "CONFIG_PARSE_ERROR"
+ERR_CONFIG_INTERPOLATION_CYCLE: str = "CONFIG_INTERPOLATION_CYCLE"
+ERR_CONFIG_SECRET_SOURCE_DENIED: str = "CONFIG_SECRET_SOURCE_DENIED"
+ERR_CONFIG_PATH_OUTSIDE_ROOT: str = "CONFIG_PATH_OUTSIDE_ROOT"
+ERR_CONFIG_SIZE_LIMIT: str = "CONFIG_SIZE_LIMIT"
+ERR_CONFIG_PROVIDER_UNAVAILABLE: str = "CONFIG_PROVIDER_UNAVAILABLE"
+
+class ConfigError(Exception):
+    code: str
+    key: str
+    message: str
+
+    def __init__(self: ConfigError, code: str, key: str, msg: str) -> None:
+        self.code = code
+        self.key = key
+        self.message = msg
+
+    def to_string(self: ConfigError) -> str:
+        return "[" + self.code + "] key='" + self.key + "': " + self.message
