@@ -31,7 +31,7 @@
 | **v0.6.0** | **Faz 6** | Sır Sınıflandırması, Maskeleme (Redaction) & Güvenli İnceleme (**Pratik Paket**) | [ ] Beklemede |
 | **v0.7.0** | **Faz 7** | Yerel Sır Sağlayıcıları (Env, Dosya ve Bellek Sağlayıcıları) | [ ] Beklemede |
 | **v0.8.0** | **Faz 8** | Doğrulanmış Yeniden Yükleme (Atomic Reload) & Son Bilinen İyi Durum | [ ] Beklemede |
-| **v0.9.0** | **Faz 9** | Opsiyonel Uzak Sır Sağlayıcı Çerçevesi (HTTPS, İzolasyon, SSRF Savunması) | [ ] Beklemede |
+| **v0.9.0** | **Faz 9** | Opsiyonel Uzak Sır Sağlayıcı Çerçevesi (HTTPS, İzolasyon, SSRF Savunması) | [x] Tamamlandı |
 | **v0.9.5** | **Faz 10** | Opsiyonel CLI Aracı (`vault validate`, `explain`, `check-env`) | [ ] Beklemede |
 | **v0.9.8** | **Faz 11** | Ekosistem Adaptörleri (Aether, Nyx, Feather vb. için ince köprüler) | [ ] Beklemede |
 | **v1.0.0** | **Faz 12** | v1.0 Sertleştirme, Tam Regresyon Matrisi & Kararlılık Sürümü | [ ] Beklemede |
@@ -258,18 +258,18 @@
 
 ---
 
-### [ ] Sürüm v0.9.0 — Faz 9: Opsiyonel Uzak Sır Sağlayıcı Çerçevesi (Remote Providers)
+### [x] Sürüm v0.9.0 — Faz 9: Opsiyonel Uzak Sır Sağlayıcı Çerçevesi (Remote Providers)
 > **Hedef:** Ağ üzerinden çalışan uzak sır sağlayıcıları için güvenli, HTTPS zorunlu, SSRF korumalı altyapı sağlamak.
 
-- [ ] **9.1 Uzak Sağlayıcı Modeli (`providers/remote_http.nox`)**
-  - [ ] Yalnızca HTTPS ve açıkça izin verilen alan adı/port (allowlist).
-  - [ ] Yeniden yönlendirme (redirect) engelleme ve SSRF savunması (`PROVIDER-02`).
-  - [ ] Bounded timeout, sınırlı tekrar deneme (retry) ve arka plana çekilme (backoff).
-  - [ ] Ağ çağrılarında veya hatalarda token sızdırmazlığı.
-- [ ] **9.2 Testler (Mock Taşıyıcı ile)**
-  - [ ] Ağ istekleri yapılmayan hermetik test koşusu (`PROVIDER-01`).
-  - [ ] Timeout ve yetkilendirme hatası testleri.
-  - [ ] **Kabul Kapısı (Gate 9):** Uzak sağlayıcılar varsayılan suite'te ağ çağrısı yapmamalı, tüm güvenlik sınırlarına uymalıdır.
+- [x] **9.1 Uzak Sağlayıcı Modeli (`providers/remote_http.nox`)**
+  - [x] Yalnızca HTTPS ve açıkça izin verilen alan adı/port (allowlist).
+  - [x] Yeniden yönlendirme (redirect) engelleme ve SSRF savunması (`PROVIDER-02`).
+  - [x] Bounded timeout, sınırlı tekrar deneme (retry) ve arka plana çekilme (backoff).
+  - [x] Ağ çağrılarında veya hatalarda token sızdırmazlığı.
+- [x] **9.2 Testler (Mock Taşıyıcı ile)**
+  - [x] Ağ istekleri yapılmayan hermetik test koşusu (`PROVIDER-01`).
+  - [x] Timeout ve yetkilendirme hatası testleri.
+  - [x] **Kabul Kapısı (Gate 9):** Uzak sağlayıcılar varsayılan suite'te ağ çağrısı yapmamalı, tüm güvenlik sınırlarına uymalıdır. (LLVM ve QBE onaylı)
 
 ---
 

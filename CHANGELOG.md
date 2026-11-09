@@ -5,6 +5,20 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-11-09
+
+### Added
+- Remote HTTPS secret provider (`providers/remote_http.nox`) with pluggable `HttpTransport` abstraction.
+- Hermetic test fake `MockHttpTransport` ensuring zero live network calls in standard CI (**`PROVIDER-01`**).
+- SSRF and protocol protection (`validate_https_endpoint`) blocking non-HTTPS schemes (`http://`, `ftp://`), cloud metadata IP addresses (`169.254.x.x`), unroutable IPs (`0.0.0.0`, `255.255.255.255`), and hosts outside the explicit allowlist.
+- Pre-request redirect validation (**`PROVIDER-02`**) preventing credential leakage by blocking HTTP 301/302 redirects to unapproved or non-HTTPS destinations before sending authentication tokens.
+- Bounded retries and timeout handling (**`PROVIDER-03`**) with exponential fail-closed behavior returning `CONFIG_PROVIDER_UNAVAILABLE` on exhausted retries without hanging.
+- Safe auth failure reporting (`CONFIG_SECRET_SOURCE_DENIED`) on 401/403 responses guaranteeing authentication tokens are never exposed in exception messages, logs, or diagnostics.
+- Response payload ceiling enforcement (64 KiB) returning `CONFIG_SIZE_LIMIT` on oversized payloads.
+- Integration with `ConfigBuilder` via `with_secret_provider` mapping fetched remote secrets into rank 7 with automatic redaction and secret tagging.
+- Test suite `tests/remote_provider_test.nox` covering SSRF rejection, hermetic mock fetching, redirect protection, bounded retries, auth disclosure protection, response size limits, and builder integration.
+- Verified 100% green across both LLVM (`zig 0.17.0`) and QBE compiler backends (16/16 test suites passing).
+
 ## [0.8.0] - 2026-11-09
 
 ### Added

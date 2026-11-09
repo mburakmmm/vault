@@ -28,9 +28,10 @@ from providers.memory import MemorySecretProvider
 from providers.env import EnvSecretProvider
 from providers.file import FileSecretProvider
 from providers.source import SecretProviderSource
+from providers.remote_http import RemoteHttpSecretProvider, HttpTransport, MockHttpTransport, HttpResponse, validate_https_endpoint
 from reload.manager import ReloadManager, ReloadResult
 
-VERSION: str = "0.8.0"
+VERSION: str = "0.9.0"
 
 def version() -> str:
     return VERSION

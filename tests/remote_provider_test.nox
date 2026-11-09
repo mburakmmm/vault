@@ -1,0 +1,275 @@
+# VAULT — Remote HTTPS Secret Provider Test Suite
+# Tests: PROVIDER-01 (Hermetic Mock Transport), PROVIDER-02 (Redirect Protection),
+# PROVIDER-03 (Bounded Retries & Timeout), SSRF/Scheme Checks, Auth Leak Prevention, Integration
+
+from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
+from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_SIZE_LIMIT
+from schema.fields import ConfigSchema
+from secrets.mark import SecretValue
+from providers.interface import SecretFetchResult, ProviderHealth
+from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, HttpResponse, validate_https_endpoint
+
+def test_ssrf_and_scheme_validation() -> None:
+    allowlist: list[str] = ["vault.corp.internal"]
+
+    # 1. Reject non-HTTPS
+    assert not validate_https_endpoint("http://vault.corp.internal/secret", allowlist)
+    assert not validate_https_endpoint("ftp://vault.corp.internal/secret", allowlist)
+
+    # 2. Reject cloud metadata and dangerous IP ranges (even if allowlisted)
+    dangerous_allowlist: list[str] = ["169.254.169.254", "0.0.0.0", "255.255.255.255"]
+    assert not validate_https_endpoint("https://169.254.169.254/latest/meta-data", dangerous_allowlist)
+    assert not validate_https_endpoint("https://169.254.1.1/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://0.0.0.0/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://255.255.255.255/secret", dangerous_allowlist)
+
+    # 3. Reject hosts not in allowlist
+    assert not validate_https_endpoint("https://evil-attacker.com/secret", allowlist)
+    assert not validate_https_endpoint("https://vault.corp.internal.evil.com/secret", allowlist)
+
+    # 4. Accept valid allowlisted endpoints
+    assert validate_https_endpoint("https://vault.corp.internal/v1/secrets", allowlist)
+    assert validate_https_endpoint("https://vault.corp.internal:8443/v1/secrets", allowlist)
+
+    # 5. Constructor rejects disallowed or SSRF endpoint
+    mock_t: MockHttpTransport = MockHttpTransport()
+    rejected: bool = False
+    try:
+        bad_prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+            "bad_prov",
+            "https://169.254.169.254/secret",
+            allowlist,
+            "Authorization",
+            "dummy_token",
+            mock_t
+        )
+    except ConfigError as err:
+        rejected = True
+        assert err.code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert rejected
+
+    print("PASS: test_ssrf_and_scheme_validation")
+
+def test_hermetic_fetch_success() -> None:
+    # PROVIDER-01: Hermetic test with MockHttpTransport (zero real network calls)
+    mock_t: MockHttpTransport = MockHttpTransport()
+    mock_t.add_route("https://vault.corp.internal/v1/secrets/STRIPE_KEY", 200, "sk_live_998877665544", "")
+
+    allowlist: list[str] = ["vault.corp.internal"]
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "corp_vault",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "X-Vault-Token",
+        "super_secret_auth_token_777",
+        mock_t
+    )
+
+    # Fetch existing secret
+    res: SecretFetchResult = prov.get("STRIPE_KEY")
+    assert res.found
+    sec: SecretValue | None = res.val
+    assert sec is not None
+    if sec is not None:
+        assert sec.reveal() == "sk_live_998877665544"
+        assert sec.to_string() == "[REDACTED]"
+    assert mock_t.call_count == 1
+
+    # Absent key returns not found
+    res_absent: SecretFetchResult = prov.get("NON_EXISTENT")
+    assert not res_absent.found
+    assert res_absent.error_code == "CONFIG_MISSING"
+
+    # Health check
+    h: ProviderHealth = prov.health()
+    assert h.healthy
+
+    # Close zeroes auth token
+    prov.close()
+    assert prov.auth_token == ""
+
+    print("PASS: test_hermetic_fetch_success")
+
+def test_redirect_off_allowlist_blocked() -> None:
+    # PROVIDER-02: Redirect off allowlist blocked before sending credentials
+    mock_t: MockHttpTransport = MockHttpTransport()
+    # Route redirects to AWS metadata service
+    mock_t.add_route(
+        "https://vault.corp.internal/v1/secrets/AWS_KEY",
+        302,
+        "",
+        "https://169.254.169.254/latest/meta-data"
+    )
+
+    allowlist: list[str] = ["vault.corp.internal"]
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "corp_vault",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "X-Vault-Token",
+        "token_12345",
+        mock_t
+    )
+
+    res: SecretFetchResult = prov.get("AWS_KEY")
+    assert not res.found
+    assert res.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert "redirect to unapproved" in res.error_msg
+    # Ensure transport called only once (the redirect target was never requested)
+    assert mock_t.call_count == 1
+
+    # Route redirects to external malicious server
+    mock_t.add_route(
+        "https://vault.corp.internal/v1/secrets/EVIL_REDIR",
+        301,
+        "",
+        "https://evil-harvest.com/stolen"
+    )
+    res2: SecretFetchResult = prov.get("EVIL_REDIR")
+    assert not res2.found
+    assert res2.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert mock_t.call_count == 2
+
+    print("PASS: test_redirect_off_allowlist_blocked")
+
+def test_bounded_retries_and_timeout() -> None:
+    # PROVIDER-03: Failing transport times out and exhausts bounded retries
+    mock_t: MockHttpTransport = MockHttpTransport()
+    mock_t.set_timeout(True)
+
+    allowlist: list[str] = ["vault.corp.internal"]
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "corp_vault",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "X-Vault-Token",
+        "token_xyz",
+        mock_t
+    )
+
+    res: SecretFetchResult = prov.get("DB_PASS")
+    assert not res.found
+    assert res.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    # Max retries is 3, so transport called exactly 3 times
+    assert mock_t.call_count == 3
+    assert "timeout or network failure" in res.error_msg
+
+    print("PASS: test_bounded_retries_and_timeout")
+
+def test_auth_rejection_no_secret_leak() -> None:
+    mock_t: MockHttpTransport = MockHttpTransport()
+    mock_t.add_route(
+        "https://vault.corp.internal/v1/secrets/TOP_SECRET",
+        401,
+        "Unauthorized",
+        ""
+    )
+
+    secret_auth_token: str = "leaked_super_token_99999"
+    allowlist: list[str] = ["vault.corp.internal"]
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "corp_vault",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "X-Vault-Token",
+        secret_auth_token,
+        mock_t
+    )
+
+    res: SecretFetchResult = prov.get("TOP_SECRET")
+    assert not res.found
+    assert res.error_code == ERR_CONFIG_SECRET_SOURCE_DENIED
+    # Verify auth token is NEVER leaked in error messages
+    assert secret_auth_token not in res.error_msg
+    assert secret_auth_token not in res.error_code
+
+    print("PASS: test_auth_rejection_no_secret_leak")
+
+def test_response_size_ceiling() -> None:
+    # 64 KiB response ceiling enforcement
+    mock_t: MockHttpTransport = MockHttpTransport()
+    # Build 65 KiB payload
+    chunk: str = "0123456789abcdef" # 16 bytes
+    big_body: str = ""
+    idx: int = 0
+    while idx < 4100: # 4100 * 16 = 65,600 bytes > 65536
+        big_body = big_body + chunk
+        idx = idx + 1
+
+    mock_t.add_route(
+        "https://vault.corp.internal/v1/secrets/OVERSIZED",
+        200,
+        big_body,
+        ""
+    )
+
+    allowlist: list[str] = ["vault.corp.internal"]
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "corp_vault",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "X-Vault-Token",
+        "token_123",
+        mock_t
+    )
+
+    res: SecretFetchResult = prov.get("OVERSIZED")
+    assert not res.found
+    assert res.error_code == ERR_CONFIG_SIZE_LIMIT
+
+    print("PASS: test_response_size_ceiling")
+
+def test_remote_provider_in_config_builder() -> None:
+    mock_t: MockHttpTransport = MockHttpTransport()
+    mock_t.add_route(
+        "https://vault.corp.internal/v1/secrets/PAYMENT_SECRET",
+        200,
+        "live_sk_payment_gateway_credential_abc",
+        ""
+    )
+
+    allowlist: list[str] = ["vault.corp.internal"]
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "corp_vault",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "X-Vault-Token",
+        "token_abc",
+        mock_t
+    )
+
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("PAYMENT_SECRET", True, False, "", True, True) # required, secret, non_blank
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    secret_keys: list[str] = ["PAYMENT_SECRET"]
+    builder.with_secret_provider(prov, secret_keys, True)
+
+    snapshot: ConfigSnapshot = builder.build()
+    assert snapshot.has("PAYMENT_SECRET")
+    assert snapshot.get_secret("PAYMENT_SECRET") == "live_sk_payment_gateway_credential_abc"
+
+    # Redaction checks
+    json_repr: str = snapshot.redacted_json()
+    assert "live_sk_payment_gateway_credential_abc" not in json_repr
+    assert "[REDACTED]" in json_repr
+
+    # Safe explain provenance check
+    diag: str = snapshot.explain("PAYMENT_SECRET")
+    assert "PAYMENT_SECRET" in diag
+    assert "corp_vault" in diag
+    assert "live_sk" not in diag
+
+    print("PASS: test_remote_provider_in_config_builder")
+
+# Run all test functions
+test_ssrf_and_scheme_validation()
+test_hermetic_fetch_success()
+test_redirect_off_allowlist_blocked()
+test_bounded_retries_and_timeout()
+test_auth_rejection_no_secret_leak()
+test_response_size_ceiling()
+test_remote_provider_in_config_builder()
+print("ALL REMOTE HTTP PROVIDER TESTS PASSED SUCCESSFULLY!")
