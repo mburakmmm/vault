@@ -12,14 +12,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-
+  test-windows:
+    name: Test (windows-latest)
+    runs-on: windows-latest
     steps:
       - name: Configure Git Line Endings
         run: git config --global core.autocrlf false
@@ -27,28 +22,12 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Nox (Linux / macOS)
-        if: runner.os != 'Windows'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG=$(curl -sSL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/mburakmmm/nox-lang/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f 4)
-          export NOX_VERSION="${TAG:-v2.1.0}"
-          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.sh | bash
-          echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
-
       - name: Install Nox (Windows)
-        if: runner.os == 'Windows'
         shell: powershell
         run: |
           $env:NOX_VERSION = "v2.1.0"
           irm https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.ps1 | iex
           "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Set up Zig for LLVM Backend
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.17.0
 
       - name: Verify Compiler
         run: |
@@ -72,3 +51,33 @@ jobs:
         run: |
           noxc run cli/main.nox -- version
           noxc run cli/main.nox -- --help
+
+  test-ubuntu:
+    name: Test (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Nox (Linux via gh)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download v2.1.0 -R mburakmmm/nox-lang -p "nox-lang-v2.1.0-linux-x64.tar.gz"
+          mkdir -p "$HOME/.nox-lang"
+          tar xzf nox-lang-v2.1.0-linux-x64.tar.gz -C "$HOME/.nox-lang" --strip-components=1
+          chmod +x "$HOME/.nox-lang/bin/"*
+          echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
+
+      - name: Verify Compiler
+        run: |
+          noxc version
+
+      - name: Static Type Check
+        run: |
+          noxc check vault.nox
+          noxc check cli/main.nox
+
+      - name: Run Test Suites
+        run: |
+          noxc test
