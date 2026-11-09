@@ -392,8 +392,12 @@ w3_count: int = await t_wrk3
 assert w1_count == 100
 assert w2_count == 100
 assert w3_count == 100
-assert writer_reloads >= 1
-assert mgr_worker.get_version() >= 2
+# RELOAD-08: Every single one of the 5 sequential reload cycles must succeed completely!
+assert writer_reloads == 5, "All 5 sequential reload cycles must succeed; got " + str(writer_reloads)
+assert mgr_worker.get_version() == 6, "Final published version must reach exact target version 6; got " + str(mgr_worker.get_version())
+final_snap: ConfigSnapshot = mgr_worker.snapshot()
+assert final_snap.get_string("SERVICE_NAME") == "WorkerApp_v6"
+assert final_snap.get_int("WORKER_PORT") == 8006
 print("PASS: test_worker_thread_snapshot_publication_safety")
 
 print("ALL RELOAD TESTS PASSED SUCCESSFULLY!")

@@ -13,7 +13,7 @@ from nox.test import assert_true, assert_eq_str, assert_eq_int
 def test_consumer_end_to_end_workflow() -> None:
     # 1. Verify library version
     v: str = version()
-    assert_eq_str(v, "1.0.8", "vault package version check")
+    assert_eq_str(v, "1.0.9", "vault package version check")
 
     # 2. Define schema
     schema: ConfigSchema = ConfigSchema()

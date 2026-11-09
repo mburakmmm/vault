@@ -5,6 +5,22 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.9] - 2026-11-09 (Exact RFC 4291 IP Literal Parser, Structured DNS Telemetry, Strict Pinning Enforcement & 100% Worker Publication Lockstep)
+
+### Fixed
+- **Exact RFC 4291 IPv6 and 32-Bit IPv4 Literal Parser (NET-12):**
+  - Re-engineered `is_ip_literal(s)` to directly invoke mathematical parsers `parse_ipv4_int()` and `parse_ipv6_hextets()` instead of superficial colon/dot substring checks.
+  - Strictly rejects malformed IP representations (e.g. `256.1.1.1`, `1.2.3.4.5`, `2001:4860:::8888`, `:2001::1`, `2001::1:`, invalid hextet characters), ensuring `is_ip_literal` fulfills its contract with zero false positives.
+- **Structured DNS Error Diagnostics & Non-Sensitive Telemetry (NET-13):**
+  - Added structured failure telemetry (`last_error: str`, `last_exit_code: int`) to `DnsResolver`, `StaticDnsResolver`, and `SystemDnsResolver`.
+  - Captures precise diagnostic failure codes (e.g. `DNS_QUERY_FAILED: status=...`, `DNS_NO_ADDRESS_RECORDS`, `STATIC_DNS_UNMAPPED_HOST`, `DNS_EXECUTABLE_UNAVAILABLE_OR_SPAWN_ERROR`) instead of silently ignoring error contexts.
+  - Propagates structured, safe diagnostic descriptions to `RemoteHttpSecretProvider` error results without leaking sensitive keys, credentials, or URLs.
+- **Strict Pinning Enforcement Guard (NET-14):**
+  - In `RemoteHttpSecretProvider.__init__`, when `strict_pinning=True` is configured, automatically intercepts and replaces unpinned standard transports (`standard_nox_http`) with `StrictPinnedHttpTransport()`, guaranteeing that unpinned sockets cannot be inadvertently utilized in strict environments.
+- **Worker Thread Sequential Publication Lockstep Verification (RELOAD-08):**
+  - Updated `tests/reload_test.nox` `test_worker_thread_snapshot_publication_safety` to assert exact completion of all 5 sequential reload cycles (`writer_reloads == 5`, `mgr_worker.get_version() == 6`).
+  - Asserts that all concurrent worker readers observed the versions advance in strict lockstep without tearing, proving deterministic memory visibility across reader fibers.
+
 ## [1.0.8] - 2026-11-09 (System DNS Hostname Resolution, Fail-Closed Fallback Elimination, Strict Socket Pinning Transport & Worker Publication Safety)
 
 ### Fixed

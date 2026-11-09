@@ -406,34 +406,33 @@ def is_numeric_or_obfuscated_host(host: str) -> bool:
     return False
 
 def is_ip_literal(s: str) -> bool:
-    # NET-09: Unambiguous IP Literal detection
+    # NET-12: Exact RFC 4291 IPv6 and 32-bit IPv4 literal parser
     cleaned: str = nox.strings.trim(s)
     if len(cleaned) == 0:
         return False
     if nox.strings.starts_with(cleaned, "[") and nox.strings.ends_with(cleaned, "]"):
-        return True
+        cleaned = cleaned[1:len(cleaned) - 1]
+
     if nox.strings.contains(cleaned, ":"):
-        return True
+        hextets: list[int] = parse_ipv6_hextets(cleaned)
+        return len(hextets) == 8
+
     if nox.strings.contains(cleaned, "."):
-        parts: list[str] = nox.strings.split(cleaned, ".")
-        if len(parts) == 4:
-            p_idx: int = 0
-            all_num: bool = True
-            while p_idx < 4:
-                p: str = parts[p_idx]
-                if len(p) == 0 or len(p) > 3 or not is_all_digits(p):
-                    all_num = False
-                p_idx = p_idx + 1
-            if all_num:
-                return True
+        v4: int = parse_ipv4_int(cleaned)
+        return v4 >= 0
+
     return False
 
 def validate_resolved_ip(ip: str) -> bool:
-    # NET-09: Strict IP address validation ONLY (IPv4 & IPv6).
+    # NET-09 / NET-12: Strict IP address validation ONLY (IPv4 & IPv6).
     # Rejects malformed IPs, loopback, private, link-local, cloud-metadata.
     # NEVER returns True for hostnames (e.g. vault.example.com)!
     cleaned: str = nox.strings.trim(ip)
     if len(cleaned) == 0:
+        return False
+
+    # Must be a syntactically valid IP literal first
+    if not is_ip_literal(cleaned):
         return False
 
     # 1. IPv6 Validation
@@ -553,15 +552,22 @@ def is_valid_hostname(host: str) -> bool:
 
 class DnsResolver:
     resolver_name: str
+    last_error: str
+    last_exit_code: int
 
     def __init__(self: DnsResolver, name: str) -> None:
         self.resolver_name = name
+        self.last_error = ""
+        self.last_exit_code = 0
 
     def resolve(self: DnsResolver, host: str) -> list[str]:
-        # NET-09: Fail-closed base resolver
+        # NET-09 / NET-12: Fail-closed base resolver with diagnostic tracking
+        self.last_error = ""
+        self.last_exit_code = 0
         if is_ip_literal(host):
             res_lit: list[str] = [host]
             return res_lit
+        self.last_error = "DNS_BASE_RESOLVER_NO_RECORDS"
         res_empty: list[str] = []
         return res_empty
 
@@ -571,26 +577,35 @@ class StaticDnsResolver(DnsResolver):
     def __init__(self: StaticDnsResolver) -> None:
         self.resolver_name = "static"
         self.records = {}
+        self.last_error = ""
+        self.last_exit_code = 0
 
     def add_record(self: StaticDnsResolver, host: str, ips: list[str]) -> None:
         self.records[host] = ips
 
     def resolve(self: StaticDnsResolver, host: str) -> list[str]:
-        # NET-09: Direct IP literal returns verbatim; unmapped host fails closed (empty list)
+        self.last_error = ""
+        self.last_exit_code = 0
         if is_ip_literal(host):
             res_lit: list[str] = [host]
             return res_lit
         if host in self.records:
             return self.records[host]
+        self.last_error = "STATIC_DNS_UNMAPPED_HOST"
         res_empty: list[str] = []
         return res_empty
 
 class SystemDnsResolver(DnsResolver):
     def __init__(self: SystemDnsResolver) -> None:
         self.resolver_name = "system"
+        self.last_error = ""
+        self.last_exit_code = 0
 
     def resolve(self: SystemDnsResolver, host: str) -> list[str]:
-        # NET-09: Only genuine IP literals bypass OS DNS lookup!
+        self.last_error = ""
+        self.last_exit_code = 0
+
+        # NET-12: Only genuine IP literals bypass OS DNS lookup!
         if is_ip_literal(host):
             res_ip: list[str] = [host]
             return res_ip
@@ -598,6 +613,7 @@ class SystemDnsResolver(DnsResolver):
         resolved: list[str] = []
         try:
             out: Output = Command("nslookup").arg(host).run()
+            self.last_exit_code = out.status
             if out.success():
                 lines: list[str] = nox.strings.split(out.stdout, "\n")
                 seen_name: bool = False
@@ -625,8 +641,13 @@ class SystemDnsResolver(DnsResolver):
                             # Full A or AAAA IPv6 literal preserved without colon truncation
                             if is_ip_literal(cand) and cand not in resolved:
                                 resolved.append(cand)
+
+                if len(resolved) == 0:
+                    self.last_error = "DNS_NO_ADDRESS_RECORDS"
+            else:
+                self.last_error = "DNS_QUERY_FAILED: status=" + str(out.status)
         except Exception:
-            pass
+            self.last_error = "DNS_EXECUTABLE_UNAVAILABLE_OR_SPAWN_ERROR"
 
         # FAIL CLOSED: If resolution produced zero addresses, return empty list!
         # NEVER return [host] fallback!
@@ -749,7 +770,10 @@ class RemoteHttpSecretProvider(SecretProvider):
         self.strict_pinning = strict_pinning
 
         if transport is not None:
-            self.transport = transport
+            if strict_pinning and transport.transport_name == "standard_nox_http":
+                self.transport = StrictPinnedHttpTransport()
+            else:
+                self.transport = transport
         else:
             if strict_pinning:
                 self.transport = StrictPinnedHttpTransport()
@@ -800,7 +824,10 @@ class RemoteHttpSecretProvider(SecretProvider):
 
                 resolved_ips: list[str] = self.dns_resolver.resolve(host)
                 if len(resolved_ips) == 0:
-                    return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, "DNS resolution failed or produced zero addresses: rejected fail-closed", self.id)
+                    diag: str = "DNS resolution failed or produced zero addresses: rejected fail-closed"
+                    if len(self.dns_resolver.last_error) > 0:
+                        diag = diag + " (" + self.dns_resolver.last_error + ")"
+                    return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, diag, self.id)
 
                 r_idx: int = 0
                 while r_idx < len(resolved_ips):

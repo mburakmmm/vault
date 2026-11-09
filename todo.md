@@ -2,6 +2,55 @@
 
 ---
 
+## 🚀 VAULT v1.0.9 Patch Release (Completed & Verified)
+
+Addressing findings from the v1.0.8 technical review:
+
+### 🚨 P0 / P1: Network & SSRF Security — Exact IP Literal Parser, Structured DNS Telemetry & Strict Pinning Guard
+
+- [x] **NET-12: Exact RFC 4291 & 32-Bit IPv4 Literal Parser Integration**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Re-implemented `is_ip_literal(s)` to directly invoke mathematical parsers `parse_ipv4_int()` and `parse_ipv6_hextets()`.
+    2. Strictly rejects malformed IP formats (e.g. `256.1.1.1`, `1.2.3.4.5`, `2001:4860:::8888`, `:2001::1`, `2001::1:`, invalid hex) rather than loosely accepting any string with colons or dots.
+    3. Expanded regression test suite in `tests/remote_provider_test.nox` covering all invalid IP representations.
+  - **Status:** Complete & Verified
+
+- [x] **NET-13: Structured DNS Error Diagnostics & Non-Sensitive Failure Telemetry**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Added structured diagnostic tracking fields (`last_error: str`, `last_exit_code: int`) to `DnsResolver`, `StaticDnsResolver`, and `SystemDnsResolver`.
+    2. Instead of silently swallowing DNS errors with `except Exception: pass`, records structured failure codes (`DNS_QUERY_FAILED: status=...`, `DNS_NO_ADDRESS_RECORDS`, `STATIC_DNS_UNMAPPED_HOST`, `DNS_EXECUTABLE_UNAVAILABLE_OR_SPAWN_ERROR`).
+    3. Propagates structured diagnostic details into `RemoteHttpSecretProvider` error results without leaking sensitive keys, tokens, or URLs.
+  - **Status:** Complete & Verified
+
+- [x] **NET-14: Strict Pinning Transport Enforcement Guard**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. In `RemoteHttpSecretProvider.__init__`, when `strict_pinning=True` is configured, automatically intercepts and replaces unpinned standard transports (`standard_nox_http`) with `StrictPinnedHttpTransport()`.
+    2. Guarantees that callers cannot accidentally bypass strict fail-closed pinning by passing an unpinned standard transport instance.
+  - **Status:** Complete & Verified
+
+### 🔒 P1: Concurrency & State Atomicity — Worker Publication Lockstep Verification
+
+- [x] **RELOAD-08: Sequential Publication Lockstep Verification (All 5 Cycles)**
+  - **File:** `tests/reload_test.nox`
+  - **Remediation:**
+    1. Hardened assertions in `test_worker_thread_snapshot_publication_safety` to assert exact completion of all 5 sequential reload cycles (`assert writer_reloads == 5`, `assert mgr_worker.get_version() == 6`).
+    2. Verified that all reader worker tasks observe configurations advancing in lockstep to exact version 6 with 0 torn reads and 0 version inversions.
+  - **Status:** Complete & Verified
+
+### 📦 P2: Packaging & Integration Consistency
+
+- [x] **DIST-05: Manifest, Facade & Multi-Platform CI Release Consistency (v1.0.9)**
+  - **File:** `nox.json`, `vault.nox`, `cli/main.nox`, `tests/cli_test.nox`, `tests/package_consumer_test.nox`, `tests/package_test.nox`, `tests/regression_matrix_test.nox`, `README.md`, `CHANGELOG.md`, `docs/security.md`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+  - **Remediation:**
+    1. Bumped versions to `1.0.9` across all files, workflows, and tests.
+    2. Verified compiler type-checks, local QBE and LLVM test suites, and remote CI workflows.
+  - **Status:** Complete & Verified
+
+---
+
 ## 🚀 VAULT v1.0.8 Patch Release (Completed & Verified)
 
 Addressing findings from the v1.0.7 technical review:
