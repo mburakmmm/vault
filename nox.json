@@ -1,6 +1,6 @@
 {
   "name": "vault",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "entry": "vault.nox",
   "dependencies": {}
 }

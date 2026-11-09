@@ -8,7 +8,13 @@ from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG
 from schema.fields import ConfigSchema
 from secrets.mark import SecretValue
 from providers.interface import SecretFetchResult, ProviderHealth
-from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, StandardHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host, DnsResolver, StaticDnsResolver, SystemDnsResolver
+from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, StandardHttpTransport, StrictPinnedHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host, is_ip_literal, is_valid_hostname, DnsResolver, StaticDnsResolver, SystemDnsResolver
+import nox.strings
+
+def make_test_dns() -> StaticDnsResolver:
+    res: StaticDnsResolver = StaticDnsResolver()
+    res.add_record("vault.corp.internal", ["93.184.216.34"])
+    return res
 
 def test_ssrf_and_scheme_validation() -> None:
     allowlist: list[str] = ["vault.corp.internal"]
@@ -59,7 +65,26 @@ def test_ssrf_and_scheme_validation() -> None:
     assert not is_numeric_or_obfuscated_host("vault.corp.internal")
     assert not is_numeric_or_obfuscated_host("api.acme.com")
 
-    # NET-03: Unit checks for validate_resolved_ip
+    # NET-09: Unit checks for is_ip_literal vs is_valid_hostname vs validate_resolved_ip
+    assert is_ip_literal("1.1.1.1")
+    assert is_ip_literal("93.184.216.34")
+    assert is_ip_literal("::1")
+    assert is_ip_literal("[::1]")
+    assert is_ip_literal("2606:2800:220:1:248:1893:25c8:1946")
+    assert not is_ip_literal("vault.corp.internal")
+    assert not is_ip_literal("api.example.com")
+    assert not is_ip_literal("localhost")
+
+    assert is_valid_hostname("vault.corp.internal")
+    assert is_valid_hostname("api.example.com")
+    assert not is_valid_hostname("1.1.1.1")
+    assert not is_valid_hostname("localhost")
+    assert not is_valid_hostname("app.localhost")
+    assert not is_valid_hostname("2130706433")
+
+    # validate_resolved_ip MUST ONLY return True for routable IP addresses; NEVER for hostnames!
+    assert not validate_resolved_ip("vault.corp.internal")
+    assert not validate_resolved_ip("api.example.com")
     assert not validate_resolved_ip("127.0.0.1")
     assert not validate_resolved_ip("10.0.0.1")
     assert not validate_resolved_ip("192.168.0.1")
@@ -69,6 +94,7 @@ def test_ssrf_and_scheme_validation() -> None:
     assert not validate_resolved_ip("::1")
     assert not validate_resolved_ip("fe80::1")
     assert not validate_resolved_ip("fc00::1")
+
     # NET-04: Additional mathematical CIDR boundary unit checks
     assert not validate_resolved_ip("224.0.0.1")
     assert not validate_resolved_ip("239.255.255.255")
@@ -81,6 +107,7 @@ def test_ssrf_and_scheme_validation() -> None:
     assert not validate_resolved_ip("192.168.255.255")
     assert not validate_resolved_ip("169.254.0.1")
     assert not validate_resolved_ip("169.254.255.254")
+
     # NET-06: Strict mathematical 128-bit IPv6 bitmask + Rejection of malformed IP formats
     assert not validate_resolved_ip("256.1.1.1")
     assert not validate_resolved_ip("1.2.3.4.5")
@@ -135,7 +162,8 @@ def test_ssrf_and_scheme_validation() -> None:
             allowlist,
             "Authorization",
             "dummy_token",
-            mock_t
+            mock_t,
+            make_test_dns()
         )
     except ConfigError as err:
         rejected = True
@@ -156,7 +184,8 @@ def test_hermetic_fetch_success() -> None:
         allowlist,
         "X-Vault-Token",
         "super_secret_auth_token_777",
-        mock_t
+        mock_t,
+        make_test_dns()
     )
 
     # Fetch existing secret
@@ -187,7 +216,6 @@ def test_hermetic_fetch_success() -> None:
 def test_redirect_off_allowlist_blocked() -> None:
     # PROVIDER-02: Redirect off allowlist blocked before sending credentials
     mock_t: MockHttpTransport = MockHttpTransport()
-    # Route redirects to AWS metadata service
     mock_t.add_route(
         "https://vault.corp.internal/v1/secrets/AWS_KEY",
         302,
@@ -202,14 +230,14 @@ def test_redirect_off_allowlist_blocked() -> None:
         allowlist,
         "X-Vault-Token",
         "token_12345",
-        mock_t
+        mock_t,
+        make_test_dns()
     )
 
     res: SecretFetchResult = prov.get("AWS_KEY")
     assert not res.found
     assert res.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
     assert "redirect to unapproved" in res.error_msg
-    # Ensure transport called only once (the redirect target was never requested)
     assert mock_t.call_count == 1
 
     # Route redirects to external malicious server
@@ -238,13 +266,13 @@ def test_bounded_retries_and_timeout() -> None:
         allowlist,
         "X-Vault-Token",
         "token_xyz",
-        mock_t
+        mock_t,
+        make_test_dns()
     )
 
     res: SecretFetchResult = prov.get("DB_PASS")
     assert not res.found
     assert res.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
-    # Max retries is 3, so transport called exactly 3 times
     assert mock_t.call_count == 3
     assert "timeout or network failure" in res.error_msg
 
@@ -267,13 +295,13 @@ def test_auth_rejection_no_secret_leak() -> None:
         allowlist,
         "X-Vault-Token",
         secret_auth_token,
-        mock_t
+        mock_t,
+        make_test_dns()
     )
 
     res: SecretFetchResult = prov.get("TOP_SECRET")
     assert not res.found
     assert res.error_code == ERR_CONFIG_SECRET_SOURCE_DENIED
-    # Verify auth token is NEVER leaked in error messages
     assert secret_auth_token not in res.error_msg
     assert secret_auth_token not in res.error_code
 
@@ -282,7 +310,6 @@ def test_auth_rejection_no_secret_leak() -> None:
 def test_response_size_ceiling() -> None:
     # 64 KiB response ceiling enforcement
     mock_t: MockHttpTransport = MockHttpTransport()
-    # Build 65 KiB payload
     chunk: str = "0123456789abcdef" # 16 bytes
     big_body: str = ""
     idx: int = 0
@@ -304,7 +331,8 @@ def test_response_size_ceiling() -> None:
         allowlist,
         "X-Vault-Token",
         "token_123",
-        mock_t
+        mock_t,
+        make_test_dns()
     )
 
     res: SecretFetchResult = prov.get("OVERSIZED")
@@ -329,11 +357,12 @@ def test_remote_provider_in_config_builder() -> None:
         allowlist,
         "X-Vault-Token",
         "token_abc",
-        mock_t
+        mock_t,
+        make_test_dns()
     )
 
     schema: ConfigSchema = ConfigSchema()
-    schema.add_string("PAYMENT_SECRET", True, False, "", True, True) # required, secret, non_blank
+    schema.add_string("PAYMENT_SECRET", True, False, "", True, True)
 
     builder: ConfigBuilder = ConfigBuilder()
     builder.with_schema(schema)
@@ -344,12 +373,10 @@ def test_remote_provider_in_config_builder() -> None:
     assert snapshot.has("PAYMENT_SECRET")
     assert snapshot.get_secret("PAYMENT_SECRET") == "live_sk_payment_gateway_credential_abc"
 
-    # Redaction checks
     json_repr: str = snapshot.redacted_json()
     assert "live_sk_payment_gateway_credential_abc" not in json_repr
     assert "[REDACTED]" in json_repr
 
-    # Safe explain provenance check
     diag: str = snapshot.explain("PAYMENT_SECRET")
     assert "PAYMENT_SECRET" in diag
     assert "corp_vault" in diag
@@ -366,15 +393,14 @@ def test_key_traversal_and_injection_rejection() -> None:
         allowlist,
         "Authorization",
         "token_123",
-        mock_t
+        mock_t,
+        make_test_dns()
     )
 
-    # Key containing path traversal '../'
     res1: SecretFetchResult = prov.get("../escaped_secret")
     assert not res1.found
     assert res1.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
 
-    # Key containing query '?' or hash '#'
     res2: SecretFetchResult = prov.get("secret?inject=1")
     assert not res2.found
     assert res2.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
@@ -383,17 +409,14 @@ def test_key_traversal_and_injection_rejection() -> None:
     assert not res3.found
     assert res3.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
 
-    # Key containing space
     res4: SecretFetchResult = prov.get("secret key")
     assert not res4.found
     assert res4.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
 
-    # NET-02: Key containing URL-encoded sequence '%2e%2e'
     res5: SecretFetchResult = prov.get("%2e%2e%2fadmin")
     assert not res5.found
     assert res5.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
 
-    # NET-02: Key containing null byte
     res6: SecretFetchResult = prov.get("secret\0extra")
     assert not res6.found
     assert res6.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
@@ -419,7 +442,6 @@ def test_net_04_dns_resolution_and_pinning() -> None:
     res1: SecretFetchResult = prov_meta.get("LEAK_KEY")
     assert not res1.found
     assert res1.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
-    # Network transport was never touched because pre-flight DNS check failed closed!
     assert mock_t.call_count == 0
 
     # 2. Simulate DNS Rebinding attack to local loopback (127.0.0.1)
@@ -453,8 +475,6 @@ def test_net_04_dns_resolution_and_pinning() -> None:
     print("PASS: test_net_04_dns_resolution_and_pinning")
 
 def test_net_07_socket_pinning_enforcement() -> None:
-    # Under strict enforce_socket_pinning=True, if connect_ip differs from hostname,
-    # StandardHttpTransport MUST fail closed because nox.http does not expose raw socket binding!
     transport: StandardHttpTransport = StandardHttpTransport(True)
     failed_closed: bool = False
     try:
@@ -466,12 +486,119 @@ def test_net_07_socket_pinning_enforcement() -> None:
     assert failed_closed, "StandardHttpTransport must fail closed when socket-level IP pinning cannot be enforced"
     print("PASS: test_net_07_socket_pinning_enforcement")
 
+def test_net_10_strict_socket_pinning_transport() -> None:
+    # NET-10: StrictPinnedHttpTransport unconditionally rejects requests fail-closed
+    strict_t: StrictPinnedHttpTransport = StrictPinnedHttpTransport()
+    rejected: bool = False
+    try:
+        empty_h: dict[str, str] = {}
+        strict_t.send_request("GET", "https://vault.corp.internal/secret", empty_h, "", 5000, "93.184.216.34", "vault.corp.internal")
+    except ConfigError as err:
+        rejected = True
+        assert err.code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert rejected
+
+    # RemoteHttpSecretProvider with strict_pinning=True
+    allowlist: list[str] = ["vault.corp.internal"]
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "strict_prov",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "Authorization",
+        "tok_123",
+        None,
+        make_test_dns(),
+        True # strict_pinning=True
+    )
+    res: SecretFetchResult = prov.get("SECRET_KEY")
+    assert not res.found
+    assert res.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    print("PASS: test_net_10_strict_socket_pinning_transport")
+
+def test_net_09_dns_failure_fails_closed() -> None:
+    # NET-09: Unresolvable or zero-record host MUST fail closed without contacting transport
+    empty_dns: StaticDnsResolver = StaticDnsResolver()
+    mock_t: MockHttpTransport = MockHttpTransport()
+    allowlist: list[str] = ["vault.corp.internal"]
+
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "empty_dns_prov",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "Authorization",
+        "tok_123",
+        mock_t,
+        empty_dns
+    )
+    res: SecretFetchResult = prov.get("SOME_KEY")
+    assert not res.found
+    assert res.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert "DNS resolution failed" in res.error_msg
+    assert mock_t.call_count == 0
+    print("PASS: test_net_09_dns_failure_fails_closed")
+
+def test_net_11_dns_rebinding_simulation() -> None:
+    # NET-11: Dynamic DNS rebinding prevention
+    mock_t: MockHttpTransport = MockHttpTransport()
+    mock_t.add_route("https://vault.corp.internal/v1/secrets/KEY1", 200, "val1", "")
+    allowlist: list[str] = ["vault.corp.internal"]
+    dynamic_dns: StaticDnsResolver = StaticDnsResolver()
+
+    # Attempt 1: Valid public IP
+    dynamic_dns.add_record("vault.corp.internal", ["93.184.216.34"])
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "rebind_prov",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "Authorization",
+        "tok_1",
+        mock_t,
+        dynamic_dns
+    )
+    res1: SecretFetchResult = prov.get("KEY1")
+    assert res1.found
+    assert mock_t.call_count == 1
+
+    # Attempt 2: Rebound to AWS metadata (169.254.169.254)
+    dynamic_dns.add_record("vault.corp.internal", ["169.254.169.254"])
+    res2: SecretFetchResult = prov.get("KEY1")
+    assert not res2.found
+    assert res2.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert mock_t.call_count == 1 # Transport NOT called!
+
+    # Attempt 3: Rebound to ULA IPv6 (fc00::1)
+    dynamic_dns.add_record("vault.corp.internal", ["fc00::1"])
+    res3: SecretFetchResult = prov.get("KEY1")
+    assert not res3.found
+    assert res3.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert mock_t.call_count == 1
+
+    # Attempt 4: Rebound to loopback (127.0.0.1)
+    dynamic_dns.add_record("vault.corp.internal", ["127.0.0.1"])
+    res4: SecretFetchResult = prov.get("KEY1")
+    assert not res4.found
+    assert res4.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert mock_t.call_count == 1
+
+    print("PASS: test_net_11_dns_rebinding_simulation")
+
 def test_system_dns_resolver_contract() -> None:
     sys_dns: SystemDnsResolver = SystemDnsResolver()
-    # IP passthrough
-    res_ip: list[str] = sys_dns.resolve("1.1.1.1")
-    assert len(res_ip) >= 1
-    assert res_ip[0] == "1.1.1.1"
+
+    # 1. IPv4 literal passthrough
+    res_ip4: list[str] = sys_dns.resolve("1.1.1.1")
+    assert len(res_ip4) >= 1
+    assert res_ip4[0] == "1.1.1.1"
+
+    # 2. IPv6 literal passthrough
+    res_ip6: list[str] = sys_dns.resolve("2606:2800:220:1:248:1893:25c8:1946")
+    assert len(res_ip6) >= 1
+    assert res_ip6[0] == "2606:2800:220:1:248:1893:25c8:1946"
+
+    # 3. Non-existent domain must fail closed (empty list), NEVER return [host]!
+    res_invalid: list[str] = sys_dns.resolve("invalid-unresolvable-domain-xyz123.test")
+    assert len(res_invalid) == 0
+
     print("PASS: test_system_dns_resolver_contract")
 
 # Run all test functions
@@ -485,5 +612,8 @@ test_remote_provider_in_config_builder()
 test_key_traversal_and_injection_rejection()
 test_net_04_dns_resolution_and_pinning()
 test_net_07_socket_pinning_enforcement()
+test_net_10_strict_socket_pinning_transport()
+test_net_09_dns_failure_fails_closed()
+test_net_11_dns_rebinding_simulation()
 test_system_dns_resolver_contract()
 print("ALL REMOTE HTTP PROVIDER TESTS PASSED SUCCESSFULLY!")

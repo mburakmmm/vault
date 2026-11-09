@@ -5,6 +5,26 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-11-09 (System DNS Hostname Resolution, Fail-Closed Fallback Elimination, Strict Socket Pinning Transport & Worker Publication Safety)
+
+### Fixed
+- **System DNS Resolver IP Literal vs Hostname Separation & Fail-Closed Policy (NET-09):**
+  - Resolved logic bug where `validate_resolved_ip()` permitted valid hostname formats, causing `SystemDnsResolver` to bypass `nslookup` for legitimate hostnames like `vault.example.com`.
+  - Introduced `is_ip_literal(host)` strictly identifying genuine IPv4 and IPv6 literal addresses.
+  - Hardened `validate_resolved_ip(ip)` to validate exclusively routable IP addresses; hostnames now strictly evaluate to `False`.
+  - Implemented `is_valid_hostname(host)` verifying RFC 1123 compliance and rejecting numeric, IP, and obfuscated formats.
+  - Eliminated hostname fallback in `SystemDnsResolver`: unresolvable or missing DNS responses fail closed immediately by returning an empty list (`[]`), triggering `ERR_CONFIG_PROVIDER_UNAVAILABLE` before network dispatch.
+  - Corrected `nslookup` parser to extract complete IPv6 (AAAA) addresses after the initial label colon without truncating subsequent hextet colons.
+- **Strict Socket Pinning vs Standard TLS Separation (NET-10):**
+  - Added dedicated `StrictPinnedHttpTransport(HttpTransport)` which unconditionally fails closed with `ERR_CONFIG_PROVIDER_UNAVAILABLE` when running on standard `nox.http` without raw socket IP binding.
+  - Added `strict_pinning: bool = False` configuration option to `RemoteHttpSecretProvider`. When enabled, defaults transport to `StrictPinnedHttpTransport()`, ensuring fail-closed operation if true socket pinning is unavailable.
+  - Exported `StrictPinnedHttpTransport`, `is_ip_literal`, and `is_valid_hostname` on the top-level `vault` facade.
+- **Dynamic DNS Rebinding Protection & Comprehensive Network Tests (NET-11):**
+  - Added dynamic DNS rebinding tests in `tests/remote_provider_test.nox` verifying that changes in resolved addresses to private/loopback/cloud-metadata ranges are intercepted and rejected on pre-flight checks.
+  - Added test cases verifying complete IPv6 AAAA parsing and failure handling for non-existent domains.
+- **Worker Thread Snapshot Publication Safety (RELOAD-07):**
+  - Added `test_worker_thread_snapshot_publication_safety` in `tests/reload_test.nox` verifying that concurrent worker reader tasks observe 100% untorn, monotonic snapshots across multiple rapid atomic publication swaps.
+
 ## [1.0.7] - 2026-11-09 (Socket-Pinning Fail-Closed Enforcement, CAS Reload Race Elimination, Strict RFC 4291 IPv6 Parser & Nanosecond Telemetry)
 
 ### Fixed

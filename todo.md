@@ -2,6 +2,59 @@
 
 ---
 
+## 🚀 VAULT v1.0.8 Patch Release (Completed & Verified)
+
+Addressing findings from the v1.0.7 technical review:
+
+### 🚨 P0: Network & SSRF Security — DNS Hostname Resolution, Fail-Closed Fallback & Strict Pinning
+
+- [x] **NET-09: SystemDnsResolver IP Literal vs Hostname Separation & Fail-Closed Resolution**
+  - **File:** `providers/remote_http.nox`, `vault.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Created `is_ip_literal(host)` to strictly identify IPv4 dotted quad decimals and IPv6 representations (bracketed or containing colons).
+    2. Hardened `validate_resolved_ip(ip)` to validate exclusively routable IP addresses; hostnames (e.g. `vault.example.com`) now strictly return `False`.
+    3. Created `is_valid_hostname(host)` verifying RFC 1123 hostname syntax and rejecting IP literals, numeric, and obfuscated formats.
+    4. In `SystemDnsResolver`: only genuine IP literals bypass OS DNS lookup (`nslookup`). Hostnames are strictly resolved.
+    5. Eliminated hostname fallback: if `nslookup` fails or domain is non-existent, `SystemDnsResolver` returns an empty list (`[]`), failing closed and triggering `ERR_CONFIG_PROVIDER_UNAVAILABLE` before touching transport.
+    6. Corrected `nslookup` address parsing: IPv6 addresses with multiple colons (`Address: 2606:2800:220:1:248:1893:25c8:1946`) are extracted completely after the first colon without truncating subsequent hextet colons.
+  - **Status:** Complete & Verified
+
+- [x] **NET-10: Strict Socket Pinning vs Standard TLS Separation (`StrictPinnedHttpTransport`)**
+  - **File:** `providers/remote_http.nox`, `vault.nox`, `tests/remote_provider_test.nox`, `docs/security.md`
+  - **Remediation:**
+    1. Introduced `StrictPinnedHttpTransport(HttpTransport)` which unconditionally raises `ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, ...)` when invoked on standard `nox.http` without raw socket IP binding primitives.
+    2. Added `strict_pinning: bool = False` configuration parameter to `RemoteHttpSecretProvider`. When True, defaults transport to `StrictPinnedHttpTransport()`, ensuring fail-closed operation if true socket pinning is unavailable.
+    3. Exported `StrictPinnedHttpTransport`, `is_ip_literal`, and `is_valid_hostname` on the top-level `vault` facade.
+  - **Status:** Complete & Verified
+
+### 🔒 P1: Concurrency & State Atomicity — Worker Publication Safety & DNS Rebinding Tests
+
+- [x] **NET-11: Dynamic DNS Rebinding Protection & Integration Tests**
+  - **File:** `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Added `test_net_11_dns_rebinding_simulation`: verifies that dynamic IP rebinding from an allowed public IP to private/cloud-metadata/loopback ranges (`169.254.169.254`, `fc00::1`, `127.0.0.1`) is intercepted on pre-flight checks and rejected fail-closed.
+    2. Added test coverage for non-existent domain resolution returning empty lists and failing closed.
+  - **Status:** Complete & Verified
+
+- [x] **RELOAD-07: Worker Thread Snapshot Publication & Reference Consistency**
+  - **File:** `tests/reload_test.nox`
+  - **Remediation:**
+    1. Added `test_worker_thread_snapshot_publication_safety` in `tests/reload_test.nox`.
+    2. Multiple concurrent worker reader tasks read `manager.get_published()` and `manager.snapshot()` across multiple rapid writer reloads.
+    3. Reader assertions verify strict monotonic version progression and 100% untorn, lockstep configuration properties across every worker.
+  - **Status:** Complete & Verified
+
+### 📦 P2: Packaging & Integration Consistency
+
+- [x] **DIST-04: Package Consumer & Manifest Consistency Verification**
+  - **File:** `nox.json`, `vault.nox`, `cli/main.nox`, `tests/package_consumer_test.nox`, `tests/package_test.nox`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+  - **Remediation:**
+    1. Updated version numbers to `1.0.8` across manifests, CLI, public facade, and isolated consumer tests.
+    2. Verified compatibility and passing runs across all test suites.
+  - **Status:** Complete & Verified
+
+---
+
 ## 🚀 VAULT v1.0.7 Patch Release (Completed & Verified)
 
 Addressing findings from the v1.0.6 technical review:

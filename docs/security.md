@@ -82,12 +82,14 @@ When consuming remote HTTPS secret stores:
    - `RemoteHttpSecretProvider` resolves hostnames via `DnsResolver` prior to issuing network requests.
    - If any resolved IP belongs to a prohibited or private range, the provider fails closed with `ERR_CONFIG_PROVIDER_UNAVAILABLE` before touching the network transport.
 
-5. **TLS-Aware Pinning & Upstream Standard Library Protocol (NET-05 / NET-07):**
+5. **TLS-Aware Pinning & Upstream Standard Library Protocol (NET-05 / NET-07 / NET-09 / NET-10):**
    - In accordance with TLS RFC specifications, replacing a URL host with an IP address breaks TLS certificate validation when certificates lack IP Subject Alternative Names (SANs).
    - VAULT maintains the authentic HTTPS URL (`https://<hostname>/<path>`) and transmits `Host: <hostname>`, while explicitly passing `connect_ip` and `tls_server_name` to `HttpTransport.send_request`.
-   - **Socket-Pinning Fail-Closed Enforcement (NET-07):** When strict socket pinning is configured (`enforce_socket_pinning=True`) and `connect_ip` differs from `tls_server_name`, `StandardHttpTransport` fails closed immediately with `ERR_CONFIG_PROVIDER_UNAVAILABLE` rather than silently issuing an unpinned request.
-   - **Authentic System DNS Resolution (NET-07):** `SystemDnsResolver` executes OS-level resolution (`nslookup`) to resolve genuine A/AAAA DNS records before pre-flight SSRF and CIDR evaluation.
+   - **Strict Socket Pinning Separation (NET-10):** Dedicated `StrictPinnedHttpTransport` unconditionally fails closed with `ERR_CONFIG_PROVIDER_UNAVAILABLE` when running on standard `nox.http` without raw socket IP binding primitives. `RemoteHttpSecretProvider` supports explicit `strict_pinning=True`.
+   - **System DNS Hostname Resolution & Fail-Closed Policy (NET-09):** Only genuine IP literals (`is_ip_literal`) bypass DNS lookup. Hostnames are strictly resolved via OS-level resolution (`nslookup`) in `SystemDnsResolver`. If resolution fails or returns zero addresses, the resolver fails closed by returning an empty list (`[]`), rejecting the request before network dispatch.
+   - **Exact RFC 1123 Hostname Validation (NET-09):** `validate_resolved_ip` strictly checks routable IP addresses and evaluates hostnames to `False`. Hostnames are separately validated via `is_valid_hostname`.
    - **RFC 4291 Strict IPv6 Grammar (NET-08):** Strictly rejects triple colons (`:::`, `fe80:::1`, `2001:4860:::8888`), single leading/trailing colons (`:2001::1`, `2001::1:`), multiple `::` abbreviations, empty blocks, and invalid hex ranges.
+   - **Dynamic DNS Rebinding Protection (NET-11):** Any runtime address re-resolution returning private, loopback, or cloud-metadata IP ranges is intercepted during pre-flight checks and aborted fail-closed.
 
 ---
 

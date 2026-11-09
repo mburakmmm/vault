@@ -325,4 +325,75 @@ assert r3_valid == 150, "Reader 3 observed torn state: " + str(r3_valid) + "/150
 assert mgr_stress.get_version() >= 2
 print("PASS: test_true_concurrent_readers_and_writer_stress")
 
+# RELOAD-07: Worker Thread Snapshot Publication & Reference Consistency Test
+schema_worker: ConfigSchema = ConfigSchema()
+schema_worker.add_string("SERVICE_NAME", True, True, "WorkerApp", False, True)
+schema_worker.add_int("WORKER_PORT", True, False, 8000, True, 1024, True, 65535, False)
+
+mem_worker: MemorySource = MemorySource("worker_mem", 5, "base", False)
+mem_worker.set_string("SERVICE_NAME", "WorkerApp_v1")
+mem_worker.set_string("WORKER_PORT", "8001")
+
+b_worker: ConfigBuilder = ConfigBuilder()
+b_worker.with_schema(schema_worker)
+b_worker.with_source(mem_worker)
+
+mgr_worker: ReloadManager = ReloadManager(b_worker)
+
+async def worker_thread_reader(worker_id: int) -> int:
+    prev_ver: int = 0
+    read_count: int = 0
+    while read_count < 100:
+        pub: PublishedConfig = mgr_worker.get_published()
+        v: int = pub.version
+        snap: ConfigSnapshot = pub.snapshot
+        s_name: str = snap.get_string("SERVICE_NAME")
+        s_port: int = snap.get_int("WORKER_PORT")
+
+        # Invariant 1: Version monotonically increases or stays same
+        assert v >= prev_ver, "Worker " + str(worker_id) + " observed version inversion: " + str(v) + " < " + str(prev_ver)
+        prev_ver = v
+
+        # Invariant 2: Snapshot and version are 100% untorn across workers
+        expected_port: int = 8000 + v
+        expected_name: str = "WorkerApp_v" + str(v)
+        assert s_port == expected_port, "Worker " + str(worker_id) + " observed torn port: " + str(s_port) + " != " + str(expected_port)
+        assert s_name == expected_name, "Worker " + str(worker_id) + " observed torn name: " + s_name + " != " + expected_name
+
+        t_y: Task[None] = spawn _noop_step()
+        await t_y
+        read_count = read_count + 1
+    return read_count
+
+async def worker_thread_writer() -> int:
+    successful_reloads: int = 0
+    step: int = 2
+    while step <= 6:
+        t_y: Task[None] = spawn _noop_step()
+        await t_y
+        mem_worker.set_string("SERVICE_NAME", "WorkerApp_v" + str(step))
+        mem_worker.set_string("WORKER_PORT", str(8000 + step))
+        res: ReloadResult = mgr_worker.reload()
+        if res.success:
+            successful_reloads = successful_reloads + 1
+        step = step + 1
+    return successful_reloads
+
+t_wrk1: Task[int] = spawn worker_thread_reader(1)
+t_wrk2: Task[int] = spawn worker_thread_reader(2)
+t_wrk_w: Task[int] = spawn worker_thread_writer()
+t_wrk3: Task[int] = spawn worker_thread_reader(3)
+
+w1_count: int = await t_wrk1
+w2_count: int = await t_wrk2
+writer_reloads: int = await t_wrk_w
+w3_count: int = await t_wrk3
+
+assert w1_count == 100
+assert w2_count == 100
+assert w3_count == 100
+assert writer_reloads >= 1
+assert mgr_worker.get_version() >= 2
+print("PASS: test_worker_thread_snapshot_publication_safety")
+
 print("ALL RELOAD TESTS PASSED SUCCESSFULLY!")

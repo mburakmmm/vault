@@ -28,11 +28,11 @@ from providers.memory import MemorySecretProvider
 from providers.env import EnvSecretProvider
 from providers.file import FileSecretProvider
 from providers.source import SecretProviderSource
-from providers.remote_http import RemoteHttpSecretProvider, HttpTransport, StandardHttpTransport, MockHttpTransport, HttpResponse, validate_https_endpoint, DnsResolver, StaticDnsResolver, SystemDnsResolver, validate_resolved_ip, is_numeric_or_obfuscated_host
+from providers.remote_http import RemoteHttpSecretProvider, HttpTransport, StandardHttpTransport, StrictPinnedHttpTransport, MockHttpTransport, HttpResponse, validate_https_endpoint, DnsResolver, StaticDnsResolver, SystemDnsResolver, validate_resolved_ip, is_numeric_or_obfuscated_host, is_ip_literal, is_valid_hostname
 from reload.manager import ReloadManager, ReloadResult, PublishedConfig
 from cli.main import run_cli, parse_cli_args, CliOptions
 
-VERSION: str = "1.0.7"
+VERSION: str = "1.0.8"
 
 def version() -> str:
     return VERSION

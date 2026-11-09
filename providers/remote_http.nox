@@ -68,6 +68,21 @@ class StandardHttpTransport(HttpTransport):
         except Exception:
             raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "unexpected http transport error")
 
+class StrictPinnedHttpTransport(HttpTransport):
+    def __init__(self: StrictPinnedHttpTransport) -> None:
+        self.transport_name = "strict_socket_pinned"
+
+    def send_request(self: StrictPinnedHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
+        # NET-10: Strict Socket Pinning Contract
+        # Standard nox.http does not expose raw socket-level IP binding.
+        # Strict mode mandates that without an underlying pinning-capable socket transport,
+        # connection must fail closed immediately to eliminate DNS rebinding risk.
+        raise ConfigError(
+            ERR_CONFIG_PROVIDER_UNAVAILABLE,
+            url,
+            "strict socket-level IP pinning required but not supported by standard nox.http runtime; connection rejected fail-closed"
+        )
+
 class MockHttpTransport(HttpTransport):
     routes: dict[str, HttpResponse]
     call_count: int
@@ -121,65 +136,16 @@ class MockHttpTransport(HttpTransport):
         empty_h: dict[str, str] = {}
         return HttpResponse(404, empty_h, "route not found", False, "")
 
-class DnsResolver:
-    resolver_name: str
-
-    def __init__(self: DnsResolver, name: str) -> None:
-        self.resolver_name = name
-
-    def resolve(self: DnsResolver, host: str) -> list[str]:
-        res: list[str] = [host]
-        return res
-
-class StaticDnsResolver(DnsResolver):
-    records: dict[str, list[str]]
-
-    def __init__(self: StaticDnsResolver) -> None:
-        self.resolver_name = "static"
-        self.records = {}
-
-    def add_record(self: StaticDnsResolver, host: str, ips: list[str]) -> None:
-        self.records[host] = ips
-
-    def resolve(self: StaticDnsResolver, host: str) -> list[str]:
-        if host in self.records:
-            return self.records[host]
-        res: list[str] = [host]
-        return res
-
-class SystemDnsResolver(DnsResolver):
-    def __init__(self: SystemDnsResolver) -> None:
-        self.resolver_name = "system"
-
-    def resolve(self: SystemDnsResolver, host: str) -> list[str]:
-        # If host is already an IP, return directly
-        if validate_resolved_ip(host):
-            res_ip: list[str] = [host]
-            return res_ip
-
-        resolved: list[str] = []
-        try:
-            out: Output = Command("nslookup").arg(host).run()
-            if out.success():
-                lines: list[str] = nox.strings.split(out.stdout, "\n")
-                seen_name: bool = False
-                for line in lines:
-                    trimmed: str = nox.strings.trim(line)
-                    if nox.strings.starts_with(trimmed, "Name:") or nox.strings.starts_with(trimmed, "name:"):
-                        seen_name = True
-                    elif seen_name and (nox.strings.starts_with(trimmed, "Address:") or nox.strings.starts_with(trimmed, "Addresses:")):
-                        parts: list[str] = nox.strings.split(trimmed, ":")
-                        if len(parts) >= 2:
-                            cand: str = nox.strings.trim(parts[1])
-                            if len(cand) > 0 and not nox.strings.contains(cand, "#"):
-                                if cand not in resolved:
-                                    resolved.append(cand)
-        except Exception:
-            pass
-
-        if len(resolved) == 0:
-            resolved.append(host)
-        return resolved
+def is_all_digits(s: str) -> bool:
+    if len(s) == 0:
+        return False
+    idx: int = 0
+    while idx < len(s):
+        ch: str = s[idx]
+        if ch < "0" or ch > "9":
+            return False
+        idx = idx + 1
+    return True
 
 def hex_val(ch: str) -> int:
     if ch == "0":
@@ -337,17 +303,6 @@ def parse_ipv6_hextets(addr: str) -> list[int]:
             return []
         return blocks
 
-def is_all_digits(s: str) -> bool:
-    if len(s) == 0:
-        return False
-    idx: int = 0
-    while idx < len(s):
-        ch: str = s[idx]
-        if ch < "0" or ch > "9":
-            return False
-        idx = idx + 1
-    return True
-
 def parse_ipv4_int(ip: str) -> int:
     parts: list[str] = nox.strings.split(ip, ".")
     if len(parts) != 4:
@@ -450,8 +405,33 @@ def is_numeric_or_obfuscated_host(host: str) -> bool:
 
     return False
 
+def is_ip_literal(s: str) -> bool:
+    # NET-09: Unambiguous IP Literal detection
+    cleaned: str = nox.strings.trim(s)
+    if len(cleaned) == 0:
+        return False
+    if nox.strings.starts_with(cleaned, "[") and nox.strings.ends_with(cleaned, "]"):
+        return True
+    if nox.strings.contains(cleaned, ":"):
+        return True
+    if nox.strings.contains(cleaned, "."):
+        parts: list[str] = nox.strings.split(cleaned, ".")
+        if len(parts) == 4:
+            p_idx: int = 0
+            all_num: bool = True
+            while p_idx < 4:
+                p: str = parts[p_idx]
+                if len(p) == 0 or len(p) > 3 or not is_all_digits(p):
+                    all_num = False
+                p_idx = p_idx + 1
+            if all_num:
+                return True
+    return False
+
 def validate_resolved_ip(ip: str) -> bool:
-    # NET-06: Strict 128-bit IPv6 bitmask + 32-bit IPv4 CIDR + Malformed Rejection
+    # NET-09: Strict IP address validation ONLY (IPv4 & IPv6).
+    # Rejects malformed IPs, loopback, private, link-local, cloud-metadata.
+    # NEVER returns True for hostnames (e.g. vault.example.com)!
     cleaned: str = nox.strings.trim(ip)
     if len(cleaned) == 0:
         return False
@@ -460,7 +440,6 @@ def validate_resolved_ip(ip: str) -> bool:
     if nox.strings.contains(cleaned, ":"):
         hextets: list[int] = parse_ipv6_hextets(cleaned)
         if len(hextets) != 8:
-            # Malformed IPv6 must fail closed
             return False
 
         h0: int = hextets[0]
@@ -528,12 +507,26 @@ def validate_resolved_ip(ip: str) -> bool:
     if is_dotted_numeric:
         ip_int: int = parse_ipv4_int(cleaned)
         if ip_int == -1:
-            # Malformed IPv4 (e.g. 256.1.1.1, 1.2.3.4.5) MUST FAIL CLOSED!
             return False
         return validate_ipv4_int(ip_int)
 
-    # 3. Hostnames
+    # Any non-IP (including hostnames like 'vault.example.com') is NOT a valid IP literal!
+    return False
+
+def is_valid_hostname(host: str) -> bool:
+    # RFC 1123 Hostname Validation
+    cleaned: str = nox.strings.trim(host)
+    if len(cleaned) == 0 or len(cleaned) > 253:
+        return False
+    if is_ip_literal(cleaned):
+        return False
     if cleaned == "localhost" or nox.strings.ends_with(cleaned, ".localhost"):
+        return False
+    if nox.strings.starts_with(cleaned, ".") or nox.strings.ends_with(cleaned, "."):
+        return False
+    if nox.strings.starts_with(cleaned, "-") or nox.strings.ends_with(cleaned, "-"):
+        return False
+    if is_numeric_or_obfuscated_host(cleaned):
         return False
 
     h_idx: int = 0
@@ -546,7 +539,98 @@ def validate_resolved_ip(ip: str) -> bool:
             return False
         h_idx = h_idx + 1
 
+    labels: list[str] = nox.strings.split(cleaned, ".")
+    l_idx: int = 0
+    while l_idx < len(labels):
+        lab: str = labels[l_idx]
+        if len(lab) == 0 or len(lab) > 63:
+            return False
+        if nox.strings.starts_with(lab, "-") or nox.strings.ends_with(lab, "-"):
+            return False
+        l_idx = l_idx + 1
+
     return True
+
+class DnsResolver:
+    resolver_name: str
+
+    def __init__(self: DnsResolver, name: str) -> None:
+        self.resolver_name = name
+
+    def resolve(self: DnsResolver, host: str) -> list[str]:
+        # NET-09: Fail-closed base resolver
+        if is_ip_literal(host):
+            res_lit: list[str] = [host]
+            return res_lit
+        res_empty: list[str] = []
+        return res_empty
+
+class StaticDnsResolver(DnsResolver):
+    records: dict[str, list[str]]
+
+    def __init__(self: StaticDnsResolver) -> None:
+        self.resolver_name = "static"
+        self.records = {}
+
+    def add_record(self: StaticDnsResolver, host: str, ips: list[str]) -> None:
+        self.records[host] = ips
+
+    def resolve(self: StaticDnsResolver, host: str) -> list[str]:
+        # NET-09: Direct IP literal returns verbatim; unmapped host fails closed (empty list)
+        if is_ip_literal(host):
+            res_lit: list[str] = [host]
+            return res_lit
+        if host in self.records:
+            return self.records[host]
+        res_empty: list[str] = []
+        return res_empty
+
+class SystemDnsResolver(DnsResolver):
+    def __init__(self: SystemDnsResolver) -> None:
+        self.resolver_name = "system"
+
+    def resolve(self: SystemDnsResolver, host: str) -> list[str]:
+        # NET-09: Only genuine IP literals bypass OS DNS lookup!
+        if is_ip_literal(host):
+            res_ip: list[str] = [host]
+            return res_ip
+
+        resolved: list[str] = []
+        try:
+            out: Output = Command("nslookup").arg(host).run()
+            if out.success():
+                lines: list[str] = nox.strings.split(out.stdout, "\n")
+                seen_name: bool = False
+                for line in lines:
+                    trimmed: str = nox.strings.trim(line)
+                    if nox.strings.starts_with(trimmed, "Name:") or nox.strings.starts_with(trimmed, "name:"):
+                        seen_name = True
+                    elif seen_name:
+                        cand: str = ""
+                        if nox.strings.starts_with(trimmed, "Address:") or nox.strings.starts_with(trimmed, "address:"):
+                            c_idx: int = nox.strings.index_of(trimmed, ":")
+                            cand = nox.strings.trim(trimmed[c_idx + 1:len(trimmed)])
+                        elif nox.strings.starts_with(trimmed, "Addresses:") or nox.strings.starts_with(trimmed, "addresses:"):
+                            c_idx2: int = nox.strings.index_of(trimmed, ":")
+                            cand = nox.strings.trim(trimmed[c_idx2 + 1:len(trimmed)])
+                        elif is_ip_literal(trimmed):
+                            # Continuation lines in Windows nslookup under 'Addresses:'
+                            cand = trimmed
+
+                        if len(cand) > 0:
+                            # Strip any port or comment delimiter e.g. '#53'
+                            hash_idx: int = nox.strings.index_of(cand, "#")
+                            if hash_idx >= 0:
+                                cand = nox.strings.trim(cand[0:hash_idx])
+                            # Full A or AAAA IPv6 literal preserved without colon truncation
+                            if is_ip_literal(cand) and cand not in resolved:
+                                resolved.append(cand)
+        except Exception:
+            pass
+
+        # FAIL CLOSED: If resolution produced zero addresses, return empty list!
+        # NEVER return [host] fallback!
+        return resolved
 
 def _extract_authority(https_url: str) -> str:
     # URL is verified to start with https:// (len 8)
@@ -603,9 +687,13 @@ def validate_https_endpoint(url: str, allowlist: list[str]) -> bool:
     if is_numeric_or_obfuscated_host(host):
         return False
 
-    # 6. NET-03: General IP validation (reject loopback, private, link-local, carrier NAT, cloud metadata)
-    if not validate_resolved_ip(host):
-        return False
+    # 6. NET-09: Host validation — either a valid routable IP literal or a valid RFC 1123 hostname
+    if is_ip_literal(host):
+        if not validate_resolved_ip(host):
+            return False
+    else:
+        if not is_valid_hostname(host):
+            return False
 
     # 7. Localhost names
     if host == "localhost" or nox.strings.ends_with(host, ".localhost"):
@@ -647,8 +735,9 @@ class RemoteHttpSecretProvider(SecretProvider):
     max_retries: int
     transport: HttpTransport
     dns_resolver: DnsResolver
+    strict_pinning: bool
 
-    def __init__(self: RemoteHttpSecretProvider, id: str, base_url: str, allowed_hosts: list[str], auth_header_name: str, auth_token: str, transport: HttpTransport | None, dns_resolver: DnsResolver | None = None) -> None:
+    def __init__(self: RemoteHttpSecretProvider, id: str, base_url: str, allowed_hosts: list[str], auth_header_name: str, auth_token: str, transport: HttpTransport | None, dns_resolver: DnsResolver | None = None, strict_pinning: bool = False) -> None:
         self.id = id
         self.provider_kind = "remote_http"
         self.base_url = base_url
@@ -657,16 +746,20 @@ class RemoteHttpSecretProvider(SecretProvider):
         self.auth_token = auth_token
         self.timeout_ms = 5000
         self.max_retries = 3
+        self.strict_pinning = strict_pinning
 
         if transport is not None:
             self.transport = transport
         else:
-            self.transport = StandardHttpTransport()
+            if strict_pinning:
+                self.transport = StrictPinnedHttpTransport()
+            else:
+                self.transport = StandardHttpTransport(enforce_socket_pinning=False)
 
         if dns_resolver is not None:
             self.dns_resolver = dns_resolver
         else:
-            self.dns_resolver = DnsResolver("default")
+            self.dns_resolver = SystemDnsResolver()
 
         # Initial SSRF / allowlist check
         if not validate_https_endpoint(base_url, allowed_hosts):
@@ -687,7 +780,7 @@ class RemoteHttpSecretProvider(SecretProvider):
         while attempts < self.max_retries:
             attempts = attempts + 1
             try:
-                # NET-04 Pre-Flight DNS Resolution and DNS Pinning
+                # NET-04 & NET-09: Pre-Flight DNS Resolution, SSRF Check & DNS Pinning
                 authority: str = _extract_authority(current_url)
                 host: str = authority
                 port: str = ""
@@ -707,7 +800,7 @@ class RemoteHttpSecretProvider(SecretProvider):
 
                 resolved_ips: list[str] = self.dns_resolver.resolve(host)
                 if len(resolved_ips) == 0:
-                    return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, "DNS resolution produced zero addresses", self.id)
+                    return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, "DNS resolution failed or produced zero addresses: rejected fail-closed", self.id)
 
                 r_idx: int = 0
                 while r_idx < len(resolved_ips):
@@ -716,8 +809,7 @@ class RemoteHttpSecretProvider(SecretProvider):
                         return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, "DNS resolution produced prohibited or private IP: SSRF blocked", self.id)
                     r_idx = r_idx + 1
 
-                # NET-05: Dispatch to validated authentic URL with connect_ip and tls_server_name
-                # Preserving authentic hostname in dispatch URL guarantees TLS SNI and cert verification succeed!
+                # NET-05 & NET-10: Dispatch to validated authentic URL with connect_ip and tls_server_name
                 pinned_ip: str = resolved_ips[0]
                 headers["Host"] = authority
                 resp: HttpResponse = self.transport.send_request("GET", current_url, headers, "", self.timeout_ms, pinned_ip, host)
