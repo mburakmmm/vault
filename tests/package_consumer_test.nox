@@ -7,14 +7,13 @@
 # 5. Snapshot entries property encapsulation
 # 6. Unified atomic reload with PublishedConfig and rollback
 
-from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot, ReloadManager, ReloadResult, PublishedConfig, ConfigEntry, version
-from sources.memory import MemorySource
+from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot, ReloadManager, ReloadResult, PublishedConfig, ConfigEntry, MemorySource, version
 from nox.test import assert_true, assert_eq_str, assert_eq_int
 
 def test_consumer_end_to_end_workflow() -> None:
     # 1. Verify library version
     v: str = version()
-    assert_eq_str(v, "1.0.5", "vault package version check")
+    assert_eq_str(v, "1.0.6", "vault package version check")
 
     # 2. Define schema
     schema: ConfigSchema = ConfigSchema()
@@ -39,6 +38,7 @@ def test_consumer_end_to_end_workflow() -> None:
     mgr: ReloadManager = ReloadManager(builder)
     pub: PublishedConfig = mgr.get_published()
     assert_eq_int(pub.version, 1, "initial published version")
+    assert_true(pub.published_at_ms > 0, "published_at_ms genuine timestamp")
 
     snap: ConfigSnapshot = pub.snapshot
     assert_eq_str(snap.get_string("APP_ENV"), "production", "app env check")

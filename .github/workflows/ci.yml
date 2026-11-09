@@ -106,3 +106,7 @@ jobs:
         run: |
           noxc run cli/main.nox -- version
           noxc run cli/main.nox -- --help
+
+      - name: Verify External Package Consumer (DIST-02)
+        run: |
+          noxc run tests/package_consumer_test.nox

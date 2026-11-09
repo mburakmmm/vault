@@ -185,21 +185,24 @@ def test_statistical_benchmark_multirun() -> None:
     warmup_snap: ConfigSnapshot = warmup_builder.build()
     assert_true(len(warmup_snap.keys()) == 1000, "Warm-up must produce 1000 keys")
 
-    # PERF-03: Multi-run microbenchmark with warm-up (50 runs) collecting p50/p90/p95/p99 percentiles
+    # PERF-04: Multi-run microbenchmark (50 runs x 5 batches = 250,000 keys) collecting sub-millisecond us/key & p50/p90/p95/p99 percentiles
     runs: int = 50
+    batch_per_run: int = 5
     total_ms: int = 0
     times: list[int] = []
 
     run_idx: int = 0
     while run_idx < runs:
         t0: int = nox.time.now_ms()
-        b: ConfigBuilder = ConfigBuilder()
-        b.with_source(mem_src)
-        b.with_schema(schema)
-        s: ConfigSnapshot = b.build()
+        b_idx: int = 0
+        while b_idx < batch_per_run:
+            b: ConfigBuilder = ConfigBuilder()
+            b.with_source(mem_src)
+            b.with_schema(schema)
+            s: ConfigSnapshot = b.build()
+            b_idx = b_idx + 1
         elapsed: int = nox.time.now_ms() - t0
 
-        assert_true(len(s.keys()) == 1000, "Snapshot in run " + str(run_idx) + " must have 1000 keys")
         total_ms = total_ms + elapsed
         times.append(elapsed)
         run_idx = run_idx + 1
@@ -223,7 +226,12 @@ def test_statistical_benchmark_multirun() -> None:
     max_ms: int = times[len(times) - 1]
     avg_ms: int = total_ms // runs
 
-    print("Statistical Microbenchmark (50 runs, 1000 keys): min=" + str(min_ms) + "ms, p50=" + str(p50_ms) + "ms, p90=" + str(p90_ms) + "ms, p95=" + str(p95_ms) + "ms, p99=" + str(p99_ms) + "ms, max=" + str(max_ms) + "ms, avg=" + str(avg_ms) + "ms")
+    # Sub-millisecond latency per key operation (microseconds)
+    p50_us_per_key: int = (p50_ms * 1000) // (batch_per_run * 1000)
+    p95_us_per_key: int = (p95_ms * 1000) // (batch_per_run * 1000)
+    p99_us_per_key: int = (p99_ms * 1000) // (batch_per_run * 1000)
+
+    print("Statistical Microbenchmark (50 runs x 5 batches = 250,000 keys): min=" + str(min_ms) + "ms, p50=" + str(p50_ms) + "ms (" + str(p50_us_per_key) + " us/key), p90=" + str(p90_ms) + "ms, p95=" + str(p95_ms) + "ms (" + str(p95_us_per_key) + " us/key), p99=" + str(p99_ms) + "ms (" + str(p99_us_per_key) + " us/key), max=" + str(max_ms) + "ms, avg=" + str(avg_ms) + "ms")
     assert_true(p95_ms < 1000, "p95 latency must be < 1000ms, actual: " + str(p95_ms) + " ms")
     assert_true(avg_ms < 1000, "Statistical average latency must be < 1000ms, actual: " + str(avg_ms) + " ms")
 

@@ -5,6 +5,34 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-11-09 (Exact 128-Bit IPv6 Parsing, TLS-Aware Transport, Truly Immutable Publication & Microsecond Telemetry)
+
+### Fixed
+- **Exact RFC 4291 128-Bit IPv6 Parser & Strict CIDR Bitmask (NET-06):**
+  - Implemented exact mathematical 128-bit IPv6 parsing converting addresses into 8 16-bit hextet integers (`parse_ipv6_hextets`), supporting `::` expansion, hex conversion, and embedded IPv4 parsing.
+  - Enforced strict bitmask CIDR validation across all hextets: unspecified (`::`), loopback (`::1`), link-local (`fe80::/10`), ULA (`fc00::/7`), multicast (`ff00::/8`), discard (`100::/64`), documentation (`2001:db8::/32`), benchmarking (`2001:2::/48`), IPv4-mapped (`::ffff:0:0/96`), IPv4-compatible (`::0:0/96`), 6to4 (`2002::/16`), and Teredo (`2001:0000::/32`).
+  - Implemented strict fail-closed rejection for malformed IP inputs (e.g. `256.1.1.1`, `fe80:::1`, `1.2.3.4.5`); malformed IP formats are never loosely treated as valid hostnames.
+- **TLS-Aware Pinning & Upstream Client Protocol (NET-05):**
+  - Preserved authentic HTTPS target URLs (`https://<host>/<path>`) and transmitted `Host: <host>` headers, explicitly passing `connect_ip` and `tls_server_name` to `HttpTransport.send_request`.
+  - Guarantees standard TLS SNI and certificate hostname verification succeed against the authentic server domain without TLS name mismatch failures.
+  - Updated `MockHttpTransport` to record and verify `last_connect_ip` and `last_tls_server_name`.
+  - Documented upstream NOX 2.1.0 standard library socket parameter boundary in `docs/security.md` and `docs/compatibility.md`.
+- **Truly Immutable `PublishedConfig` with Epoch Timestamps (RELOAD-05):**
+  - Sealed internal fields in `PublishedConfig`: `_version`, `_snapshot`, `_published_at_ms`, `_reload_count`.
+  - Exposed read-only `@property` accessors preventing external tampering.
+  - Recorded real publication epoch timestamps using `nox.time.now_ms()` on initialization and atomic publication swaps.
+  - Enforced atomic store release barrier (`self._atomic_reloading.store(False)`) to guarantee cross-thread and cross-worker memory visibility.
+- **Multi-Writer Contention & Parallel Consistency Test (TEST-04):**
+  - Expanded `tests/reload_test.nox` with 2 concurrent writer tasks competing to reload simultaneously while 3 concurrent reader tasks execute continuous reads.
+  - Asserted zero torn states across all reader samples, monotonic version progression, and clean CAS contention handling.
+- **External Package Consumer Clean Facade Exports (DIST-02):**
+  - Eliminated all submodule imports in `tests/package_consumer_test.nox`, importing 100% of types (`ConfigBuilder`, `ConfigSchema`, `ConfigSnapshot`, `MemorySource`, `PublishedConfig`, etc.) directly from `vault`.
+  - Added CI step running consumer verification directly.
+
+### Added
+- **Sub-Microsecond Latency Benchmarking (PERF-04):**
+  - Expanded microbenchmark in `tests/benchmark_test.nox` with 5-batch measurement (250,000 keys per run), computing exact microsecond-per-key latency (`us/key`) alongside `min`, `p50`, `p90`, `p95`, `p99`, `max`, and `avg`.
+
 ## [1.0.5] - 2026-11-09 (DNS Pinning, Unified Atomic Publication & Microbenchmark Hardening)
 
 ### Fixed

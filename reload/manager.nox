@@ -5,18 +5,38 @@ from core.builder import ConfigBuilder
 from core.snapshot import ConfigSnapshot
 from core.errors import ConfigError
 from nox.atomic import new_bool, AtomicBool
+import nox.time
 
 class PublishedConfig:
-    version: int
-    snapshot: ConfigSnapshot
-    published_at_ms: int
-    reload_count: int
+    _version: int
+    _snapshot: ConfigSnapshot
+    _published_at_ms: int
+    _reload_count: int
 
     def __init__(self: PublishedConfig, version: int, snapshot: ConfigSnapshot, published_at_ms: int, reload_count: int) -> None:
-        self.version = version
-        self.snapshot = snapshot
-        self.published_at_ms = published_at_ms
-        self.reload_count = reload_count
+        self._version = version
+        self._snapshot = snapshot
+        if published_at_ms > 0:
+            self._published_at_ms = published_at_ms
+        else:
+            self._published_at_ms = nox.time.now_ms()
+        self._reload_count = reload_count
+
+    @property
+    def version(self: PublishedConfig) -> int:
+        return self._version
+
+    @property
+    def snapshot(self: PublishedConfig) -> ConfigSnapshot:
+        return self._snapshot
+
+    @property
+    def published_at_ms(self: PublishedConfig) -> int:
+        return self._published_at_ms
+
+    @property
+    def reload_count(self: PublishedConfig) -> int:
+        return self._reload_count
 
 class ReloadResult:
     success: bool
@@ -46,7 +66,8 @@ class ReloadManager:
         self._atomic_reloading = new_bool(False)
         self.builder.builder_version = "v1"
         initial_snap: ConfigSnapshot = self.builder.build()
-        self._published = PublishedConfig(1, initial_snap, 0, 0)
+        now_ts: int = nox.time.now_ms()
+        self._published = PublishedConfig(1, initial_snap, now_ts, 0)
 
     @property
     def is_reloading(self: ReloadManager) -> bool:
@@ -87,10 +108,11 @@ class ReloadManager:
             # 1. Build complete candidate snapshot off to the side
             candidate: ConfigSnapshot = self.builder.build()
 
-            # 2. RELOAD-04: Publish new snapshot and version atomically in a single PublishedConfig container
-            new_pub: PublishedConfig = PublishedConfig(next_version_num, candidate, 0, self.reload_count)
+            # 2. RELOAD-05: Publish new snapshot and version atomically with real timestamp
+            now_reload: int = nox.time.now_ms()
+            new_pub: PublishedConfig = PublishedConfig(next_version_num, candidate, now_reload, self.reload_count)
             self._published = new_pub  # Atomic reference assignment
-            self._atomic_reloading.store(False)
+            self._atomic_reloading.store(False)  # Atomic release barrier
             return ReloadResult(True, new_pub.version, "", "", new_pub.snapshot)
 
         except ConfigError as err:

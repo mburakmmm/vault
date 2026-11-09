@@ -2,7 +2,78 @@
 
 ---
 
-## 🚀 VAULT v1.0.5 Patch Release (Completed & Verified)
+## 🚀 VAULT v1.0.6 Patch Release (Completed & Verified)
+
+Addressing findings from the v1.0.5 technical review:
+
+### 🚨 P0: Network & SSRF Security — DNS Pinning, TLS SNI & Exact 128-Bit IPv6 Parsing
+
+- [x] **NET-05: Real DNS Pre-Flight, TLS-Aware Transport & Upstream Socket Limitation Protocol**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`, `docs/security.md`, `docs/compatibility.md`
+  - **Remediation:**
+    1. Preserve authentic hostname in dispatch URL (`https://<host>/<path>`) to guarantee standard TLS SNI and TLS certificate verification succeed without hostname mismatch.
+    2. Pass `connect_ip` and `tls_server_name` explicitly to `HttpTransport.send_request` contract.
+    3. In `MockHttpTransport`, verify that `tls_server_name == host` and that simulated requests route to `connect_ip`.
+    4. Provide `SystemDnsResolver` and extensible `DnsResolver` contract.
+    5. Document upstream NOX 2.1.0 `nox.http` client limitation in `docs/security.md` and `docs/compatibility.md`: `nox.http.request` does not expose separate socket `connect_ip` options.
+  - **Status:** Complete & Verified
+
+- [x] **NET-06: Mathematical 128-Bit IPv6 Parser, Strict CIDR Bitmask & Malformed IP Rejection**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Implement full RFC 4291 IPv6 parser returning 8 exact 16-bit integers (`list[int]`), supporting `::` expansion, hex conversion, and embedded IPv4 (`::ffff:a.b.c.d`).
+    2. Implement mathematical bitmask CIDR validation across all 8 hextets:
+       - Unspecified `::/128`
+       - Loopback `::1/128`
+       - Link-Local `fe80::/10` (`(h0 & 65472) == 65152`)
+       - Unique Local Address ULA `fc00::/7` (`(h0 & 65024) == 64512`)
+       - Multicast `ff00::/8` (`(h0 & 65280) == 65280`)
+       - IPv4-mapped `::ffff:0:0/96` (mathematical IPv4 bitmasking on embedded address)
+       - IPv4-compatible `::0:0/96`
+       - Documentation `2001:db8::/32`
+       - Discard `100::/64`
+       - 6to4 `2002::/16` and Teredo `2001:0000::/32` (mathematical checks on encapsulated IPv4)
+    3. Re-architect `validate_resolved_ip(candidate: str)`: fail closed immediately on malformed IP inputs (e.g. `256.1.1.1`, `0177.0.0.1`, `127.1`, invalid hextets); never fall through to treat malformed IP formats as valid hostnames.
+  - **Status:** Complete & Verified
+
+### 🔒 P1: Concurrency & State Atomicity — Immutable Publication & Multi-Writer Contention
+
+- [x] **RELOAD-05: Truly Immutable `PublishedConfig` with Private Encapsulation & Real Timestamp**
+  - **File:** `reload/manager.nox`, `tests/reload_test.nox`
+  - **Remediation:**
+    1. Enforce private fields in `PublishedConfig`: `_version`, `_snapshot`, `_published_at_ms`, `_reload_count`.
+    2. Expose read-only `@property` getters: `version`, `snapshot`, `published_at_ms`, `reload_count`.
+    3. Initialize `published_at_ms` with `nox.time.now_ms()` on creation and upon atomic publication swap.
+    4. Leverage atomic release barrier (`self._atomic_reloading.store(False)`) to guarantee cross-thread memory ordering.
+  - **Status:** Complete & Verified
+
+- [x] **TEST-04: Multi-Writer Collision & Parallel Reader-Writer Contention Test**
+  - **File:** `tests/reload_test.nox`
+  - **Remediation:**
+    1. Implement multi-task stress test with 2 concurrent writer tasks competing to reload simultaneously while 3 concurrent reader tasks read `get_published()`.
+    2. Assert atomic CAS rejection (`CONFIG_RELOAD_IN_PROGRESS`) on colliding writer, 100% success on winning writer, and zero torn states (`v == snap.version`) across all reader samples.
+  - **Status:** Complete & Verified
+
+### ⚡ P2: Microbenchmarks & Isolated Package Consumer
+
+- [x] **PERF-04: Sub-Microsecond Precision Statistical Benchmarking**
+  - **File:** `tests/benchmark_test.nox`
+  - **Remediation:**
+    1. Multi-batch microbenchmark computing per-key execution latency in microseconds (`us/key`).
+    2. Collect and log sorted telemetry for `min`, `p50`, `p90`, `p95`, `p99`, `max`, `avg`.
+  - **Status:** Complete & Verified
+
+- [x] **DIST-02: Isolated External Package Consumer & Clean Facade Exports**
+  - **File:** `vault.nox`, `tests/package_consumer_test.nox`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+  - **Remediation:**
+    1. Eliminate all internal submodule imports in `tests/package_consumer_test.nox` so that 100% of types/classes are imported exclusively from `vault`.
+    2. Add an isolated external consumer test step in GitHub Actions CI workflows running outside the repository root.
+    3. Bump package version to `1.0.6` across manifests, documentation, and metadata.
+  - **Status:** Complete & Verified
+
+---
+
+## ✅ VAULT v1.0.5 Patch Release (Completed & Verified)
 
 Addressing findings from the v1.0.4 technical review:
 

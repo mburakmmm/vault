@@ -81,6 +81,25 @@ def test_ssrf_and_scheme_validation() -> None:
     assert not validate_resolved_ip("192.168.255.255")
     assert not validate_resolved_ip("169.254.0.1")
     assert not validate_resolved_ip("169.254.255.254")
+    # NET-06: Strict mathematical 128-bit IPv6 bitmask + Rejection of malformed IP formats
+    assert not validate_resolved_ip("256.1.1.1")
+    assert not validate_resolved_ip("1.2.3.4.5")
+    assert not validate_resolved_ip("1.1.1.999")
+    assert not validate_resolved_ip("fe80:::1")
+    assert not validate_resolved_ip("::g1")
+    assert not validate_resolved_ip("::")
+    assert not validate_resolved_ip("::1")
+    assert not validate_resolved_ip("fe80::1")
+    assert not validate_resolved_ip("fe80::2aa:bbff:fe01:2340")
+    assert not validate_resolved_ip("fc00::1")
+    assert not validate_resolved_ip("fd00::1")
+    assert not validate_resolved_ip("ff02::1")
+    assert not validate_resolved_ip("100::1")
+    assert not validate_resolved_ip("2001:db8::1")
+    assert not validate_resolved_ip("::ffff:10.0.0.1")
+    assert not validate_resolved_ip("::ffff:169.254.169.254")
+    assert not validate_resolved_ip("::ffff:127.0.0.1")
+    assert validate_resolved_ip("::ffff:93.184.216.34")
     assert validate_resolved_ip("1.1.1.1")
     assert validate_resolved_ip("8.8.8.8")
     assert validate_resolved_ip("93.184.216.34")
@@ -421,6 +440,8 @@ def test_net_04_dns_resolution_and_pinning() -> None:
         assert sec.reveal() == "pinned_sk_live_9988"
         assert sec.to_string() == "[REDACTED]"
     assert mock_t.call_count == 1
+    assert mock_t.last_connect_ip == "93.184.216.34"
+    assert mock_t.last_tls_server_name == "vault.corp.internal"
 
     print("PASS: test_net_04_dns_resolution_and_pinning")
 

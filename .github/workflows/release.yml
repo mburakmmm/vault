@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v1.0.5)'
+        description: 'Tag to release (e.g. v1.0.6)'
         required: true
-        default: 'v1.0.5'
+        default: 'v1.0.6'
 
 concurrency:
   group: release-${{ github.ref }}
@@ -105,6 +105,10 @@ jobs:
       - name: Run Test Suites (LLVM Backend)
         run: |
           noxc test --backend llvm
+
+      - name: Verify External Package Consumer (DIST-02)
+        run: |
+          noxc run tests/package_consumer_test.nox
 
   publish-release:
     name: Create GitHub Release & Package Distribution

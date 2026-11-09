@@ -29,7 +29,7 @@ class HttpTransport:
     def __init__(self: HttpTransport, name: str) -> None:
         self.transport_name = name
 
-    def send_request(self: HttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int) -> HttpResponse:
+    def send_request(self: HttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
         empty_h: dict[str, str] = {}
         return HttpResponse(500, empty_h, "base transport unimplemented", False, "")
 
@@ -37,7 +37,7 @@ class StandardHttpTransport(HttpTransport):
     def __init__(self: StandardHttpTransport) -> None:
         self.transport_name = "standard_nox_http"
 
-    def send_request(self: StandardHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int) -> HttpResponse:
+    def send_request(self: StandardHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
         try:
             res: nox.http.HttpResponse = nox.http.request(method, url, body, headers, timeout_ms)
             is_redir: bool = res.status == 301 or res.status == 302 or res.status == 307 or res.status == 308
@@ -58,12 +58,18 @@ class MockHttpTransport(HttpTransport):
     routes: dict[str, HttpResponse]
     call_count: int
     should_timeout: bool
+    last_requested_url: str
+    last_connect_ip: str
+    last_tls_server_name: str
 
     def __init__(self: MockHttpTransport) -> None:
         self.transport_name = "mock"
         self.routes = {}
         self.call_count = 0
         self.should_timeout = False
+        self.last_requested_url = ""
+        self.last_connect_ip = ""
+        self.last_tls_server_name = ""
 
     def add_route(self: MockHttpTransport, url: str, status_code: int, body: str, redirect_location: str) -> None:
         is_redir: bool = status_code == 301 or status_code == 302 or status_code == 307 or status_code == 308
@@ -75,15 +81,19 @@ class MockHttpTransport(HttpTransport):
     def set_timeout(self: MockHttpTransport, timeout: bool) -> None:
         self.should_timeout = timeout
 
-    def send_request(self: MockHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int) -> HttpResponse:
+    def send_request(self: MockHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
         self.call_count = self.call_count + 1
+        self.last_requested_url = url
+        self.last_connect_ip = connect_ip
+        self.last_tls_server_name = tls_server_name
+
         if self.should_timeout:
             raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "transport read timeout")
 
         if url in self.routes:
             return self.routes[url]
 
-        # Support virtual-host lookup for DNS-pinned requests
+        # Support virtual-host lookup for DNS-pinned requests if caller rewrote URL
         if "Host" in headers and nox.strings.starts_with(url, "https://"):
             vhost: str = headers["Host"]
             without_scheme: str = url[8:len(url)]
@@ -123,6 +133,142 @@ class StaticDnsResolver(DnsResolver):
         res: list[str] = [host]
         return res
 
+def hex_val(ch: str) -> int:
+    if ch == "0":
+        return 0
+    if ch == "1":
+        return 1
+    if ch == "2":
+        return 2
+    if ch == "3":
+        return 3
+    if ch == "4":
+        return 4
+    if ch == "5":
+        return 5
+    if ch == "6":
+        return 6
+    if ch == "7":
+        return 7
+    if ch == "8":
+        return 8
+    if ch == "9":
+        return 9
+    if ch == "a" or ch == "A":
+        return 10
+    if ch == "b" or ch == "B":
+        return 11
+    if ch == "c" or ch == "C":
+        return 12
+    if ch == "d" or ch == "D":
+        return 13
+    if ch == "e" or ch == "E":
+        return 14
+    if ch == "f" or ch == "F":
+        return 15
+    return -1
+
+def parse_hextet(s: str) -> int:
+    if len(s) == 0 or len(s) > 4:
+        return -1
+    v: int = 0
+    idx: int = 0
+    while idx < len(s):
+        h: int = hex_val(s[idx:idx + 1])
+        if h < 0:
+            return -1
+        v = (v << 4) | h
+        idx = idx + 1
+    return v
+
+def _find_last_colon(s: str) -> int:
+    idx: int = len(s) - 1
+    while idx >= 0:
+        if s[idx:idx + 1] == ":":
+            return idx
+        idx = idx - 1
+    return -1
+
+def parse_ipv6_hextets(addr: str) -> list[int]:
+    cleaned: str = nox.strings.trim(addr)
+    if nox.strings.starts_with(cleaned, "[") and nox.strings.ends_with(cleaned, "]"):
+        cleaned = cleaned[1:len(cleaned) - 1]
+
+    embedded_ipv4: list[int] = []
+    last_colon: int = _find_last_colon(cleaned)
+    if last_colon >= 0:
+        tail: str = cleaned[last_colon + 1:len(cleaned)]
+        if nox.strings.contains(tail, "."):
+            parts4: list[str] = nox.strings.split(tail, ".")
+            if len(parts4) != 4:
+                return []
+            if not is_all_digits(parts4[0]) or not is_all_digits(parts4[1]) or not is_all_digits(parts4[2]) or not is_all_digits(parts4[3]):
+                return []
+            p0: int = int(parts4[0])
+            p1: int = int(parts4[1])
+            p2: int = int(parts4[2])
+            p3: int = int(parts4[3])
+            if p0 < 0 or p0 > 255 or p1 < 0 or p1 > 255 or p2 < 0 or p2 > 255 or p3 < 0 or p3 > 255:
+                return []
+            embedded_ipv4.append((p0 << 8) | p1)
+            embedded_ipv4.append((p2 << 8) | p3)
+            cleaned = cleaned[0:last_colon + 1]
+
+    c_idx1: int = nox.strings.index_of(cleaned, "::")
+    has_double_colon: bool = c_idx1 >= 0
+    if has_double_colon:
+        rest: str = cleaned[c_idx1 + 2:len(cleaned)]
+        if nox.strings.contains(rest, "::"):
+            return []
+        left_str: str = cleaned[0:c_idx1]
+        right_str: str = rest
+
+        left_blocks: list[int] = []
+        if len(left_str) > 0:
+            for part in nox.strings.split(left_str, ":"):
+                v: int = parse_hextet(part)
+                if v < 0:
+                    return []
+                left_blocks.append(v)
+
+        right_blocks: list[int] = []
+        if len(right_str) > 0:
+            for part in nox.strings.split(right_str, ":"):
+                if len(part) > 0:
+                    v2: int = parse_hextet(part)
+                    if v2 < 0:
+                        return []
+                    right_blocks.append(v2)
+
+        total_given: int = len(left_blocks) + len(right_blocks) + len(embedded_ipv4)
+        if total_given > 7:
+            return []
+        missing: int = 8 - total_given
+
+        result: list[int] = []
+        for b in left_blocks:
+            result.append(b)
+        while missing > 0:
+            result.append(0)
+            missing = missing - 1
+        for b in right_blocks:
+            result.append(b)
+        for b in embedded_ipv4:
+            result.append(b)
+        return result
+    else:
+        blocks: list[int] = []
+        for part in nox.strings.split(cleaned, ":"):
+            v3: int = parse_hextet(part)
+            if v3 < 0:
+                return []
+            blocks.append(v3)
+        for b in embedded_ipv4:
+            blocks.append(b)
+        if len(blocks) != 8:
+            return []
+        return blocks
+
 def is_all_digits(s: str) -> bool:
     if len(s) == 0:
         return False
@@ -154,6 +300,54 @@ def parse_ipv4_int(ip: str) -> int:
         res = (res << 8) | val
         idx = idx + 1
     return res
+
+def validate_ipv4_int(ip_int: int) -> bool:
+    if ip_int < 0:
+        return False
+    # Unroutable / Zero: 0.0.0.0/8
+    if (ip_int & 4278190080) == 0:
+        return False
+    # Loopback: 127.0.0.0/8
+    if (ip_int & 4278190080) == 2130706432:
+        return False
+    # Broadcast: 255.255.255.255
+    if ip_int == 4294967295:
+        return False
+    # RFC 1918 Private: 10.0.0.0/8
+    if (ip_int & 4278190080) == 167772160:
+        return False
+    # RFC 1918 Private: 172.16.0.0/12
+    if (ip_int & 4293918720) == 2886729728:
+        return False
+    # RFC 1918 Private: 192.168.0.0/16
+    if (ip_int & 4294901760) == 3232235520:
+        return False
+    # Cloud Link-Local Metadata (AWS/GCP/Azure): 169.254.0.0/16
+    if (ip_int & 4294901760) == 2851995648:
+        return False
+    # Carrier-Grade NAT (CGNAT): 100.64.0.0/10
+    if (ip_int & 4290772992) == 1681915904:
+        return False
+    # Multicast: 224.0.0.0/4
+    if (ip_int & 4026531840) == 3758096384:
+        return False
+    # Reserved: 240.0.0.0/4
+    if (ip_int & 4026531840) == 4026531840:
+        return False
+    # Benchmark Network: 198.18.0.0/15
+    if (ip_int & 4294836224) == 3323068416:
+        return False
+    # Documentation: TEST-NET-1 (192.0.2.0/24)
+    if (ip_int & 4294967040) == 3221225984:
+        return False
+    # Documentation: TEST-NET-2 (198.51.100.0/24)
+    if (ip_int & 4294967040) == 3325256704:
+        return False
+    # Documentation: TEST-NET-3 (203.0.113.0/24)
+    if (ip_int & 4294967040) == 3405803776:
+        return False
+    # Valid public IPv4
+    return True
 
 def is_numeric_or_obfuscated_host(host: str) -> bool:
     # 1. Hex prefix
@@ -189,102 +383,100 @@ def is_numeric_or_obfuscated_host(host: str) -> bool:
     return False
 
 def validate_resolved_ip(ip: str) -> bool:
-    # NET-04: Mathematical IP/CIDR Range Evaluation
-    # Rejects loopback, RFC 1918, CGNAT, link-local, cloud metadata, multicast, broadcast, and reserved ranges
+    # NET-06: Strict 128-bit IPv6 bitmask + 32-bit IPv4 CIDR + Malformed Rejection
     cleaned: str = nox.strings.trim(ip)
     if len(cleaned) == 0:
         return False
 
-    # 1. IPv4 Mathematical CIDR Validation
-    ip_int: int = parse_ipv4_int(cleaned)
-    if ip_int != -1:
-        # Loopback: 127.0.0.0/8 (0x7F000000 / 0xFF000000)
-        if (ip_int & 4278190080) == 2130706432:
+    # 1. IPv6 Validation
+    if nox.strings.contains(cleaned, ":"):
+        hextets: list[int] = parse_ipv6_hextets(cleaned)
+        if len(hextets) != 8:
+            # Malformed IPv6 must fail closed
             return False
-        # Unroutable / Zero: 0.0.0.0/8
-        if (ip_int & 4278190080) == 0:
+
+        h0: int = hextets[0]
+        h1: int = hextets[1]
+        h2: int = hextets[2]
+        h3: int = hextets[3]
+        h4: int = hextets[4]
+        h5: int = hextets[5]
+        h6: int = hextets[6]
+        h7: int = hextets[7]
+
+        # Unspecified: ::/128
+        if h0 == 0 and h1 == 0 and h2 == 0 and h3 == 0 and h4 == 0 and h5 == 0 and h6 == 0 and h7 == 0:
             return False
-        # Broadcast: 255.255.255.255
-        if ip_int == 4294967295:
+        # Loopback: ::1/128
+        if h0 == 0 and h1 == 0 and h2 == 0 and h3 == 0 and h4 == 0 and h5 == 0 and h6 == 0 and h7 == 1:
             return False
-        # RFC 1918 Private: 10.0.0.0/8 (0x0A000000)
-        if (ip_int & 4278190080) == 167772160:
+        # Link-local unicast: fe80::/10 (0xfe80 - 0xfebf)
+        if (h0 & 65472) == 65152:
             return False
-        # RFC 1918 Private: 172.16.0.0/12 (0xAC100000 / 0xFFF00000)
-        if (ip_int & 4293918720) == 2886729728:
+        # Unique Local Address (ULA) / Private: fc00::/7 (0xfc00 - 0xfdff)
+        if (h0 & 65024) == 64512:
             return False
-        # RFC 1918 Private: 192.168.0.0/16 (0xC0A80000 / 0xFFFF0000)
-        if (ip_int & 4294901760) == 3232235520:
+        # Multicast: ff00::/8
+        if (h0 & 65280) == 65280:
             return False
-        # Cloud Link-Local Metadata (AWS/GCP/Azure): 169.254.0.0/16 (0xA9FE0000)
-        if (ip_int & 4294901760) == 2851995648:
+        # Discard prefix: 100::/64
+        if h0 == 256 and h1 == 0 and h2 == 0 and h3 == 0:
             return False
-        # Carrier-Grade NAT (CGNAT): 100.64.0.0/10 (0x64400000 / 0xFFC00000)
-        if (ip_int & 4290772992) == 1681915904:
+        # Documentation: 2001:db8::/32
+        if h0 == 8193 and h1 == 3512:
             return False
-        # Multicast: 224.0.0.0/4 (0xE0000000 / 0xF0000000)
-        if (ip_int & 4026531840) == 3758096384:
+        # Benchmarking: 2001:2::/48
+        if h0 == 8193 and h1 == 2:
             return False
-        # Reserved: 240.0.0.0/4 (0xF0000000 / 0xF0000000)
-        if (ip_int & 4026531840) == 4026531840:
-            return False
-        # Benchmark Network: 198.18.0.0/15 (0xC6120000 / 0xFFFE0000)
-        if (ip_int & 4294836224) == 3323068416:
-            return False
-        # Documentation: TEST-NET-1 (192.0.2.0/24)
-        if (ip_int & 4294967040) == 3221225984:
-            return False
-        # Documentation: TEST-NET-2 (198.51.100.0/24)
-        if (ip_int & 4294967040) == 3325256704:
-            return False
-        # Documentation: TEST-NET-3 (203.0.113.0/24)
-        if (ip_int & 4294967040) == 3405803776:
-            return False
-        # Valid public IPv4
+        # IPv4-mapped IPv6: ::ffff:0:0/96
+        if h0 == 0 and h1 == 0 and h2 == 0 and h3 == 0 and h4 == 0 and h5 == 65535:
+            emb4: int = (h6 << 16) | h7
+            return validate_ipv4_int(emb4)
+        # IPv4-compatible IPv6: ::0:0/96
+        if h0 == 0 and h1 == 0 and h2 == 0 and h3 == 0 and h4 == 0 and h5 == 0 and (h6 != 0 or h7 > 1):
+            emb4_c: int = (h6 << 16) | h7
+            return validate_ipv4_int(emb4_c)
+        # 6to4: 2002::/16
+        if h0 == 8194:
+            emb4_6to4: int = (h1 << 16) | h2
+            return validate_ipv4_int(emb4_6to4)
+        # Teredo: 2001:0000::/32
+        if h0 == 8193 and h1 == 0:
+            emb4_teredo: int = (~((h6 << 16) | h7)) & 4294967295
+            return validate_ipv4_int(emb4_teredo)
+
         return True
 
-    # 2. IPv6 Range Validation
-    v6_candidate: str = cleaned
-    if nox.strings.starts_with(v6_candidate, "[") and nox.strings.ends_with(v6_candidate, "]"):
-        v6_candidate = v6_candidate[1:len(v6_candidate) - 1]
-    lower_v6: str = nox.strings.lower(v6_candidate)
+    # 2. IPv4 Validation
+    if is_numeric_or_obfuscated_host(cleaned):
+        return False
 
-    if lower_v6 == "::1" or lower_v6 == "0:0:0:0:0:0:0:1":
-        return False
-    if lower_v6 == "::" or lower_v6 == "0:0:0:0:0:0:0:0":
-        return False
-    # Link-local unicast (fe80::/10)
-    if nox.strings.starts_with(lower_v6, "fe8") or nox.strings.starts_with(lower_v6, "fe9") or nox.strings.starts_with(lower_v6, "fea") or nox.strings.starts_with(lower_v6, "feb"):
-        return False
-    # Unique Local Address ULA (fc00::/7)
-    if nox.strings.starts_with(lower_v6, "fc") or nox.strings.starts_with(lower_v6, "fd"):
-        return False
-    # Multicast (ff00::/8)
-    if nox.strings.starts_with(lower_v6, "ff"):
-        return False
-    # Documentation (2001:db8::/32)
-    if nox.strings.starts_with(lower_v6, "2001:db8") or nox.strings.starts_with(lower_v6, "2001:0db8"):
-        return False
-    # Discard prefix (100::/64)
-    if nox.strings.starts_with(lower_v6, "100:"):
-        return False
-    # IPv4-mapped IPv6 (::ffff:0:0/96)
-    if nox.strings.contains(lower_v6, ":ffff:"):
-        f_idx: int = nox.strings.index_of(lower_v6, ":ffff:")
-        embedded: str = lower_v6[f_idx + 6:len(lower_v6)]
-        emb_int: int = parse_ipv4_int(embedded)
-        if emb_int != -1:
-            if not validate_resolved_ip(embedded):
-                return False
-        else:
+    is_dotted_numeric: bool = False
+    if nox.strings.contains(cleaned, "."):
+        first_char: str = cleaned[0:1]
+        if first_char >= "0" and first_char <= "9":
+            is_dotted_numeric = True
+
+    if is_dotted_numeric:
+        ip_int: int = parse_ipv4_int(cleaned)
+        if ip_int == -1:
+            # Malformed IPv4 (e.g. 256.1.1.1, 1.2.3.4.5) MUST FAIL CLOSED!
             return False
-
-    if nox.strings.contains(lower_v6, ":"):
-        return True
+        return validate_ipv4_int(ip_int)
 
     # 3. Hostnames
     if cleaned == "localhost" or nox.strings.ends_with(cleaned, ".localhost"):
         return False
+
+    h_idx: int = 0
+    while h_idx < len(cleaned):
+        c: str = cleaned[h_idx:h_idx + 1]
+        is_alpha: bool = (c >= "a" and c <= "z") or (c >= "A" and c <= "Z")
+        is_num: bool = (c >= "0" and c <= "9")
+        is_special: bool = (c == "." or c == "-")
+        if not (is_alpha or is_num or is_special):
+            return False
+        h_idx = h_idx + 1
 
     return True
 
@@ -456,21 +648,11 @@ class RemoteHttpSecretProvider(SecretProvider):
                         return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, "DNS resolution produced prohibited or private IP: SSRF blocked", self.id)
                     r_idx = r_idx + 1
 
-                # Pin connection to validated IP
+                # NET-05: Dispatch to validated authentic URL with connect_ip and tls_server_name
+                # Preserving authentic hostname in dispatch URL guarantees TLS SNI and cert verification succeed!
                 pinned_ip: str = resolved_ips[0]
-                dispatch_url: str = current_url
                 headers["Host"] = authority
-                if pinned_ip != host:
-                    pinned_auth: str = pinned_ip
-                    if len(port) > 0:
-                        pinned_auth = pinned_ip + ":" + port
-                    after_auth_idx: int = 8 + len(authority)
-                    path_part: str = ""
-                    if len(current_url) > after_auth_idx:
-                        path_part = current_url[after_auth_idx:len(current_url)]
-                    dispatch_url = "https://" + pinned_auth + path_part
-
-                resp: HttpResponse = self.transport.send_request("GET", dispatch_url, headers, "", self.timeout_ms)
+                resp: HttpResponse = self.transport.send_request("GET", current_url, headers, "", self.timeout_ms, pinned_ip, host)
 
                 # 1. Handle HTTP Redirects (PROVIDER-02): Validate new location before sending credentials
                 if resp.is_redirect:

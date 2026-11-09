@@ -58,30 +58,48 @@ When consuming remote HTTPS secret stores:
 
 ---
 
-## 5. SSRF Defense, Pre-Flight DNS Resolution & DNS Pinning (NET-03 / NET-04)
+## 5. SSRF Defense, Pre-Flight DNS Resolution & TLS-Aware Pinning (NET-04 / NET-05 / NET-06)
 
-1. **Mathematical IPv4 CIDR Validation:**
-   - Host IP addresses are converted into 32-bit unsigned integers and validated against exact binary bitmasks.
+1. **Exact 128-Bit IPv6 Parser & Strict Mathematical CIDR Evaluation (NET-06):**
+   - Full RFC 4291 parsing produces 8 exact 16-bit hextet integers (`list[int]`), supporting standard compression (`::`), hex conversion, and embedded IPv4 suffixes (`::ffff:a.b.c.d`).
+   - Bitwise mask evaluations mathematically verify and reject:
+     - Unspecified (`::/128`) and Loopback (`::1/128`)
+     - Link-Local Unicast (`fe80::/10` -> `(h0 & 65472) == 65152`)
+     - Unique Local Address ULA / Private (`fc00::/7` -> `(h0 & 65024) == 64512`)
+     - Multicast (`ff00::/8` -> `(h0 & 65280) == 65280`)
+     - Discard Prefix (`100::/64`) and Documentation (`2001:db8::/32`, `2001:2::/48`)
+     - IPv4-Mapped (`::ffff:0:0/96`), IPv4-Compatible (`::0:0/96`), 6to4 (`2002::/16`), and Teredo (`2001:0000::/32`) with embedded 32-bit IPv4 extraction and binary CIDR evaluation.
+   - **Fail-Closed Malformed Input Policy:** Malformed IP representations (e.g. `256.1.1.1`, `fe80:::1`, `1.2.3.4.5`) fail closed immediately; they are never loosely treated as valid hostnames.
+
+2. **Mathematical 32-Bit IPv4 CIDR Validation:**
+   - Host IP addresses are converted into 32-bit integers and validated against exact binary bitmasks.
    - Prohibits: Loopback (`127.0.0.0/8`), RFC 1918 Private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), Cloud Link-Local Metadata (`169.254.0.0/16`), Carrier-Grade NAT (`100.64.0.0/10`), Multicast (`224.0.0.0/4`), Unroutable (`0.0.0.0/8`), Broadcast (`255.255.255.255`), and Reserved (`240.0.0.0/4`).
-2. **IPv6 Subnet Validation:**
-   - Validates Loopback (`::1`), Link-Local (`fe80::/10`), Unique Local ULA (`fc00::/7`), IPv4-mapped (`::ffff:0:0/96`), and Multicast (`ff00::/8`).
+
 3. **Numeric Host Obfuscation Rejection:**
    - Hostnames containing DWORD decimal integers (`2130706433`), octal notation (`0177.0.0.1`), abbreviated formats (`127.1`), or hexadecimal (`0x7f000001`) are rejected outright.
-4. **Pre-Flight DNS Resolution & Rebinding Defense:**
+
+4. **Pre-Flight DNS Resolution & TOCTOU Defense:**
    - `RemoteHttpSecretProvider` resolves hostnames via `DnsResolver` prior to issuing network requests.
-   - If any resolved IP belongs to a prohibited or private range, the provider fails closed with `ERR_CONFIG_PROVIDER_UNAVAILABLE`.
-5. **DNS Pinning (TOCTOU Elimination):**
-   - The connection target is pinned directly to the verified IP address (`https://[pinned_ip]/path`), transmitting the original domain name in the HTTP `Host:` header. This eliminates Time-Of-Check to Time-Of-Use (TOCTOU) DNS rebinding attacks.
+   - If any resolved IP belongs to a prohibited or private range, the provider fails closed with `ERR_CONFIG_PROVIDER_UNAVAILABLE` before touching the network transport.
+
+5. **TLS-Aware Pinning & Upstream Standard Library Protocol (NET-05):**
+   - In accordance with TLS RFC specifications, replacing a URL host with an IP address breaks TLS certificate validation when certificates lack IP Subject Alternative Names (SANs).
+   - VAULT maintains the authentic HTTPS URL (`https://<hostname>/<path>`) and transmits `Host: <hostname>`, while explicitly passing `connect_ip` and `tls_server_name` to `HttpTransport.send_request`.
+   - Pluggable transports and testing mocks route requests to `connect_ip` while strictly validating TLS against `tls_server_name`. Under standard `nox.http`, preserving the authentic hostname in the request URL ensures TLS SNI and certificate validation succeed without name mismatches.
 
 ---
 
-## 6. Atomic Concurrency & Unified Publication (RELOAD-03 / RELOAD-04)
+## 6. Atomic Concurrency & Unified Immutable Publication (RELOAD-04 / RELOAD-05)
 
 1. **Hardware-Level Atomic CAS Coordination:**
    - `ReloadManager` reload execution is guarded by `nox.atomic.new_bool(False)` utilizing `compare_and_swap(False, True)`.
-   - Eliminates thread/worker race conditions during concurrent reloads.
-2. **Unified Atomic Publication Record (`PublishedConfig`):**
-   - Version number, immutable snapshot, timestamp, and metrics are encapsulated within a single immutable `PublishedConfig` object.
-   - Updates are published via an atomic single-pointer swap (`self._published = new_published`). Readers calling `manager.get_published()` or `manager.snapshot()` observe a 100% synchronized, non-torn state.
+   - Eliminates thread/worker race conditions during concurrent reloads. Multi-writer collisions safely return `CONFIG_RELOAD_IN_PROGRESS`.
+
+2. **Truly Immutable Publication Record (`PublishedConfig`):**
+   - Version number, immutable snapshot, epoch timestamp, and reload count are encapsulated in `PublishedConfig`.
+   - All internal fields (`_version`, `_snapshot`, `_published_at_ms`, `_reload_count`) are private, exposed via read-only `@property` getters.
+   - `published_at_ms` is initialized with genuine `nox.time.now_ms()` clock telemetry upon creation and publication.
+   - State swaps execute via an atomic pointer assignment (`self._published = new_published`) immediately followed by an atomic store release barrier (`self._atomic_reloading.store(False)`), guaranteeing cross-thread and cross-worker memory visibility.
+
 3. **Cooperative Fiber Scheduling:**
    - Async reload routines yield cooperatively via `spawn` and `await`, ensuring genuine task interleaving across both single-threaded cooperative (QBE) and parallel multi-core (LLVM) execution environments.
