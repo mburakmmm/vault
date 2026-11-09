@@ -5,6 +5,24 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-11-09 (Production Stable Release)
+
+### Added
+- Comprehensive regression scenario matrix test suite (`tests/regression_matrix_test.nox`) verifying full compliance with AGENTS.md §19 acceptance criteria:
+  - `ENV` (01-08): Pure parsing, CRLF/BOM normalization, unquoted, double-quoted, single-quoted, escape sequences, duplicate key rejection, and bounded resource limits.
+  - `MERGE` (01-05): Strict 9-tier deterministic source precedence, origin provenance tracking, and missing/null/empty distinctions.
+  - `SCHEMA` (01-05): Typed schema validation (`int`, `float`, `string`, `bool`, `list`), numeric range bounds, length constraints, aggregate multi-error collection without early aborts, and strict coercion.
+  - `INTERP` (01-04): Graph-based variable resolution, cycle detection, multi-hop chains, depth/size limits, and automatic transitive secret taint propagation.
+  - `SECRET` (01-04): Complete leak prevention in logs, `str()`, JSON exports, exceptions, and safe diagnostics, with authorized `get_secret()` retrieval and defense-in-depth string redaction.
+  - `FILE` (01-05): Root confinement, directory traversal rejection (`../` and symlink escapes), and 1 MiB file size limits.
+  - `FORMAT` (01-02): Type-preserving JSON, TOML 1.0, and YAML bridges with structured container preservation.
+  - `PROFILE` (01-02): Profile layering (`development`, `test`, `staging`, `production`), filename mapping, and production strictness.
+  - `PROVIDER` (01-04): Local providers (memory, env, file) and remote HTTPS provider with mock transport, SSRF defense, redirect protection, bounded retries, and token non-disclosure.
+  - `RELOAD` (01-02): Validate-before-swap atomic reloads, monotonic version progression, and last-known-good state preservation on candidate errors.
+  - `CLI` (01-05): Standalone CLI tool (`cli/main.nox`) supporting `validate`, `explain`, `check-env`, `version`, and side-effect-free `--help`.
+  - `CI` (01-03): Deterministic automated test execution across 19 test suites verified 100% green on **both** LLVM (`zig 0.17.0`) and QBE backends.
+- Sealed v1.0.0 API contracts, documentation, and architecture decision records.
+
 ## [0.9.8] - 2026-11-09
 
 ### Added

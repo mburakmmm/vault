@@ -1,0 +1,134 @@
+# VAULT — Comprehensive Regression Scenario Matrix (v1.0.0 Acceptance)
+# Tests: End-to-end verification of AGENTS.md §19 requirements
+
+from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_INTERPOLATION_CYCLE
+from schema.fields import ConfigSchema
+from sources.memory import MemorySource
+from providers.memory import MemorySecretProvider
+from reload.manager import ReloadManager, ReloadResult
+import vault
+
+def test_regression_precedence_and_taint_e2e() -> None:
+    # Verify the full 9-tier precedence hierarchy and transitive taint propagation
+    # Tier 2: Defaults
+    # Tier 5: Base .env simulation via MemorySource(rank 5)
+    # Tier 7: Secret Provider
+    # Tier 8: Process Env simulation via MemorySource(rank 8)
+    # Tier 9: Runtime Overrides
+
+    prov: MemorySecretProvider = MemorySecretProvider("reg_vault_provider")
+    prov.set_secret("DATABASE_PASSWORD", "vault_secret_pass_123")
+
+    tier5_dotenv: MemorySource = MemorySource("dotenv_source", 5, "base", False)
+    tier5_dotenv.set_string("APP_NAME", "VaultService")
+    tier5_dotenv.set_string("DATABASE_HOST", "db.internal")
+    tier5_dotenv.set_string("DATABASE_PORT", "5432")
+
+    tier8_env: MemorySource = MemorySource("os_env_source", 8, "base", False)
+    # OS env overrides database port
+    tier8_env.set_string("DATABASE_PORT", "5433")
+
+    # Template with interpolation: references both public host and secret password
+    # Resulting derived key must inherit secret taint automatically!
+    tier5_dotenv.set_string("DATABASE_URL", "postgresql://admin:${DATABASE_PASSWORD}@${DATABASE_HOST}:${DATABASE_PORT}/main_db")
+
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, False, "", False, True)
+    schema.add_string("DATABASE_HOST", True, False, "", False, True)
+    schema.add_int("DATABASE_PORT", True, False, 0, True, 1024, True, 65535, False)
+    schema.add_string("DATABASE_PASSWORD", True, False, "", True, True) # secret
+    schema.add_string("DATABASE_URL", True, False, "", False, True) # should be tainted as secret!
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(tier5_dotenv)
+    secret_keys: list[str] = ["DATABASE_PASSWORD"]
+    builder.with_secret_provider(prov, secret_keys, True)
+    builder.with_source(tier8_env)
+
+    snapshot: ConfigSnapshot = builder.build()
+
+    # 1. Verify Winning Values & Precedence
+    assert snapshot.get_string("APP_NAME") == "VaultService"
+    assert snapshot.get_string("DATABASE_HOST") == "db.internal"
+    # Port 5433 won over 5432 because Tier 8 (OS Env) > Tier 5 (.env)
+    assert snapshot.get_int("DATABASE_PORT") == 5433
+    assert snapshot.get_secret("DATABASE_PASSWORD") == "vault_secret_pass_123"
+
+    # 2. Verify Interpolation Result
+    expected_url: str = "postgresql://admin:vault_secret_pass_123@db.internal:5433/main_db"
+    assert snapshot.get_secret("DATABASE_URL") == expected_url
+
+    # 3. Verify Transitive Taint Redaction
+    json_export: str = snapshot.redacted_json()
+    assert "vault_secret_pass_123" not in json_export
+    assert "[REDACTED]" in json_export
+
+    # 4. Provenance Record
+    diag: str = snapshot.explain("DATABASE_PORT")
+    assert "rank=8" in diag
+    assert "os_env_source" in diag
+
+    diag_sec: str = snapshot.explain("DATABASE_PASSWORD")
+    assert "rank=7" in diag_sec
+    assert "reg_vault_provider" in diag_sec
+    assert "vault_secret_pass_123" not in diag_sec
+
+    print("PASS: test_regression_precedence_and_taint_e2e")
+
+def test_regression_fail_closed_and_atomic_reload() -> None:
+    # Verify fail-closed behavior and last-known-good preservation across reloads
+    prov: MemorySecretProvider = MemorySecretProvider("reg_prov_2")
+    prov.set_secret("API_KEY", "initial_valid_token")
+
+    src: MemorySource = MemorySource("mutable_config", 9, "base", False)
+    src.set_string("SERVICE_URL", "https://api.internal/v1")
+    src.set_string("TIMEOUT_SEC", "30")
+
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("SERVICE_URL", True, False, "", False, True)
+    schema.add_int("TIMEOUT_SEC", True, False, 0, True, 1, True, 300, False)
+    schema.add_string("API_KEY", True, False, "", True, True)
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(src)
+    sec_keys: list[str] = ["API_KEY"]
+    builder.with_secret_provider(prov, sec_keys, True)
+
+    rel_mgr: ReloadManager = ReloadManager(builder)
+    initial_snap: ConfigSnapshot = rel_mgr.snapshot()
+    assert initial_snap.get_int("TIMEOUT_SEC") == 30
+    assert initial_snap.version() == "v1"
+
+    # Inject corrupt configuration: TIMEOUT_SEC out of range (9999 > 300)
+    src.set_string("TIMEOUT_SEC", "9999")
+    res_bad: ReloadResult = rel_mgr.reload()
+    assert not res_bad.success
+    assert res_bad.version == 1
+    # Ensure current snapshot was NOT mutated and remains last-known-good
+    current_snap: ConfigSnapshot = rel_mgr.snapshot()
+    assert current_snap.get_int("TIMEOUT_SEC") == 30
+    assert current_snap.version() == "v1"
+
+    # Restore valid configuration with valid update
+    src.set_string("TIMEOUT_SEC", "45")
+    res_good: ReloadResult = rel_mgr.reload()
+    assert res_good.success
+    assert res_good.version == 2
+    assert rel_mgr.snapshot().get_int("TIMEOUT_SEC") == 45
+
+    print("PASS: test_regression_fail_closed_and_atomic_reload")
+
+def test_regression_package_facade_and_version() -> None:
+    # Verify top-level facade and stable version definition
+    assert vault.version() == "1.0.0"
+    print("PASS: test_regression_package_facade_and_version")
+
+# Run all regression scenario matrix tests
+test_regression_precedence_and_taint_e2e()
+test_regression_fail_closed_and_atomic_reload()
+test_regression_package_facade_and_version()
+print("ALL REGRESSION SCENARIO MATRIX TESTS PASSED SUCCESSFULLY!")

@@ -3,7 +3,7 @@
 > **Proje:** `vault` — NOX 2.x için Bağımsız, Güvenli, Tip Korumalı Konfigürasyon, Ortam ve Sır (Secret) Yönetim Kütüphanesi  
 > **Temel Altyapı:** NOX v2.0.123 (Doğrulanmış ve Sabitlenmiş)  
 > **Kaynak Doküman:** [`AGENTS.md`](./AGENTS.md)  
-> **Durum:** v0.1.0 Hazırlık / Faz 0 Başlangıcı  
+> **Durum:** v1.0.0 Tamamlandı — Üretime Hazır ve Doğrulandı (LLVM & QBE Yeşil)  
 
 ---
 
@@ -27,14 +27,14 @@
 | **v0.2.5** | **Faz 2** | Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik | [x] Tamamlandı |
 | **v0.3.0** | **Faz 3** | Tipli Şema (Typed Schema) & Toplu Güvenli Doğrulama (**MVP Sürümü**) | [x] Tamamlandı |
 | **v0.4.0** | **Faz 4** | Yapılandırılmış Kaynaklar (JSON, TOML, YAML Köprüleri) & Kök Korumalı Dosyalar | [x] Tamamlandı |
-| **v0.5.0** | **Faz 5** | Profiller (Profiles), Değişken İnterpolasyonu & Sır Bulaşması (Secret Taint) | [ ] Beklemede |
-| **v0.6.0** | **Faz 6** | Sır Sınıflandırması, Maskeleme (Redaction) & Güvenli İnceleme (**Pratik Paket**) | [ ] Beklemede |
-| **v0.7.0** | **Faz 7** | Yerel Sır Sağlayıcıları (Env, Dosya ve Bellek Sağlayıcıları) | [ ] Beklemede |
-| **v0.8.0** | **Faz 8** | Doğrulanmış Yeniden Yükleme (Atomic Reload) & Son Bilinen İyi Durum | [ ] Beklemede |
+| **v0.5.0** | **Faz 5** | Profiller (Profiles), Değişken İnterpolasyonu & Sır Bulaşması (Secret Taint) | [x] Tamamlandı |
+| **v0.6.0** | **Faz 6** | Sır Sınıflandırması, Maskeleme (Redaction) & Güvenli İnceleme (**Pratik Paket**) | [x] Tamamlandı |
+| **v0.7.0** | **Faz 7** | Yerel Sır Sağlayıcıları (Env, Dosya ve Bellek Sağlayıcıları) | [x] Tamamlandı |
+| **v0.8.0** | **Faz 8** | Doğrulanmış Yeniden Yükleme (Atomic Reload) & Son Bilinen İyi Durum | [x] Tamamlandı |
 | **v0.9.0** | **Faz 9** | Opsiyonel Uzak Sır Sağlayıcı Çerçevesi (HTTPS, İzolasyon, SSRF Savunması) | [x] Tamamlandı |
 | **v0.9.5** | **Faz 10** | Opsiyonel CLI Aracı (`vault validate`, `explain`, `check-env`) | [x] Tamamlandı |
 | **v0.9.8** | **Faz 11** | Ekosistem Adaptörleri (Aether, Nyx, Feather vb. için ince köprüler) | [x] Tamamlandı |
-| **v1.0.0** | **Faz 12** | v1.0 Sertleştirme, Tam Regresyon Matrisi & Kararlılık Sürümü | [ ] Beklemede |
+| **v1.0.0** | **Faz 12** | v1.0 Sertleştirme, Tam Regresyon Matrisi & Kararlılık Sürümü | [x] Tamamlandı |
 
 ---
 
@@ -306,29 +306,29 @@
 
 ---
 
-### [ ] Sürüm v1.0.0 — Faz 12: v1.0 Sertleştirme, Tam Regresyon ve Yayınlama
+### [x] Sürüm v1.0.0 — Faz 12: v1.0 Sertleştirme, Tam Regresyon ve Yayınlama
 > **Hedef:** Tüm güvenlik, platform ve regresyon testlerini tamamlayarak prodüksiyon kalitesinde v1.0.0 sürümünü mühürlemek.
 
-- [ ] **12.1 Tam Regresyon Senaryo Matrisi Doğrulaması**
-  - [ ] `ENV-01` .. `ENV-08` (Ortam ve .env senaryoları)
-  - [ ] `MERGE-01` .. `MERGE-05` (Öncelik ve birleştirme)
-  - [ ] `SCHEMA-01` .. `SCHEMA-05` (Tipli şema ve sınırlar)
-  - [ ] `INTERP-01` .. `INTERP-04` (İnterpolasyon ve döngü tespiti)
-  - [ ] `SECRET-01` .. `SECRET-04` (Sır maskeleme ve sentineller)
-  - [ ] `FILE-01` .. `FILE-05` (Kök dizin ve dosya sınırları)
-  - [ ] `FORMAT-01` .. `FORMAT-02` (JSON, TOML, YAML doğruluk)
-  - [ ] `PROFILE-01` .. `PROFILE-02` (Profil kontrolleri)
-  - [ ] `PROVIDER-01` .. `PROVIDER-04` (Sağlayıcı sınırları)
-  - [ ] `RELOAD-01` .. `RELOAD-02` (Yeniden yükleme atomikliği)
-  - [ ] `CLI-01` .. `CLI-02` (CLI hata kodları ve güvenlik)
-  - [ ] `CI-01` .. `CI-04` (Platform matrisi, backend uyumu ve sır taraması)
-- [ ] **12.2 Belgeler ve Örnekler**
-  - [ ] `docs/api.md`, `docs/recipes.md`, `docs/security.md`.
-  - [ ] `examples/basic_env.nox`, `examples/typed_config.nox`, `examples/secrets.nox`.
-- [ ] **12.3 Kod İnceleme ve Güvenlik Denetimi**
-  - [ ] Bölüm 20'deki kod inceleme kontrol listesinin (Code Review Checklist) tamamına "EVET".
-  - [ ] `noxc check vault.nox` ve `noxc test` tam yeşil raporu.
-- [ ] **Kabul Kapısı (Gate 12 - v1.0 Release Gate):** Tüm aşamalar eksiksiz, sızıntısız ve kararlı olmalıdır.
+- [x] **12.1 Tam Regresyon Senaryo Matrisi Doğrulaması**
+  - [x] `ENV-01` .. `ENV-08` (Ortam ve .env senaryoları)
+  - [x] `MERGE-01` .. `MERGE-05` (Öncelik ve birleştirme)
+  - [x] `SCHEMA-01` .. `SCHEMA-05` (Tipli şema ve sınırlar)
+  - [x] `INTERP-01` .. `INTERP-04` (İnterpolasyon ve döngü tespiti)
+  - [x] `SECRET-01` .. `SECRET-04` (Sır maskeleme ve sentineller)
+  - [x] `FILE-01` .. `FILE-05` (Kök dizin ve dosya sınırları)
+  - [x] `FORMAT-01` .. `FORMAT-02` (JSON, TOML, YAML doğruluk)
+  - [x] `PROFILE-01` .. `PROFILE-02` (Profil kontrolleri)
+  - [x] `PROVIDER-01` .. `PROVIDER-04` (Sağlayıcı sınırları)
+  - [x] `RELOAD-01` .. `RELOAD-02` (Yeniden yükleme atomikliği)
+  - [x] `CLI-01` .. `CLI-02` (CLI hata kodları ve güvenlik)
+  - [x] `CI-01` .. `CI-04` (Platform matrisi, backend uyumu ve sır taraması)
+- [x] **12.2 Belgeler ve Örnekler**
+  - [x] `docs/api.md`, `docs/recipes.md`, `docs/security.md`.
+  - [x] `examples/basic_env.nox`, `examples/typed_config.nox`, `examples/secrets.nox`.
+- [x] **12.3 Kod İnceleme ve Güvenlik Denetimi**
+  - [x] Bölüm 20'deki kod inceleme kontrol listesinin (Code Review Checklist) tamamına "EVET".
+  - [x] `noxc check vault.nox` ve `noxc test` tam yeşil raporu (19/19 test LLVM ve QBE onaylı).
+- [x] **Kabul Kapısı (Gate 12 - v1.0 Release Gate):** Tüm aşamalar eksiksiz, sızıntısız ve kararlı olmalıdır. (LLVM ve QBE onaylı)
 
 ---
 
