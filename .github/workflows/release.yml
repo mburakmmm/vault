@@ -17,12 +17,31 @@ concurrency:
 
 jobs:
   ci-gate:
-    name: Cross-Platform CI Gate (${{ matrix.os }})
+    name: Cross-Platform CI Gate (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - platform: linux-x64
+            os: ubuntu-latest
+            asset: nox-lang-v2.1.0-linux-x64.tar.gz
+            is_windows: false
+
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            asset: nox-lang-v2.1.0-linux-arm64.tar.gz
+            is_windows: false
+
+          - platform: macos-arm64
+            os: macos-latest
+            asset: nox-lang-v2.1.0-macos-arm64.tar.gz
+            is_windows: false
+
+          - platform: windows-x64
+            os: windows-latest
+            asset: nox-lang-v2.1.0-windows-x64.zip
+            is_windows: true
 
     steps:
       - name: Configure Git Line Endings
@@ -31,28 +50,39 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Nox (Linux / macOS)
-        if: runner.os != 'Windows'
+      - name: Setup MinGW Toolchain (Windows)
+        if: matrix.is_windows
+        shell: powershell
+        run: |
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Nox (${{ matrix.platform }}) - Unix
+        if: ${{ !matrix.is_windows }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(curl -sSL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/mburakmmm/nox-lang/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f 4)
-          export NOX_VERSION="${TAG:-v2.1.0}"
-          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.sh | bash
+          gh release download v2.1.0 -R mburakmmm/nox-lang -p "${{ matrix.asset }}"
+          mkdir -p "$HOME/.nox-lang"
+          tar xzf "${{ matrix.asset }}" -C "$HOME/.nox-lang" --strip-components=1
+          chmod +x "$HOME/.nox-lang/bin/"*
           echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
 
-      - name: Install Nox (Windows)
-        if: runner.os == 'Windows'
+      - name: Install Nox (${{ matrix.platform }}) - Windows
+        if: matrix.is_windows
         shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $env:NOX_VERSION = "v2.1.0"
-          irm https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.ps1 | iex
-          "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Set up Zig for LLVM Backend
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.17.0
+          gh release download v2.1.0 -R mburakmmm/nox-lang -p "${{ matrix.asset }}"
+          $InstallDir = "$env:USERPROFILE\.nox-lang"
+          New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+          Expand-Archive -Path "${{ matrix.asset }}" -DestinationPath "$env:TEMP\nox_extract" -Force
+          if (Test-Path "$env:TEMP\nox_extract\nox-lang-v2.1.0-windows-x64") {
+              Copy-Item -Recurse -Force "$env:TEMP\nox_extract\nox-lang-v2.1.0-windows-x64\*" $InstallDir
+          } else {
+              Copy-Item -Recurse -Force "$env:TEMP\nox_extract\*" $InstallDir
+          }
+          "$InstallDir\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify Compiler
         run: |
@@ -62,6 +92,11 @@ jobs:
         run: |
           noxc check vault.nox
           noxc check cli/main.nox
+          noxc check adapters/aether.nox
+          noxc check adapters/nyx.nox
+          noxc check adapters/feather.nox
+          noxc check adapters/noxen.nox
+          noxc check adapters/nova.nox
 
       - name: Run Test Suites
         run: |
@@ -85,9 +120,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(curl -sSL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/mburakmmm/nox-lang/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f 4)
-          export NOX_VERSION="${TAG:-v2.1.0}"
-          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.sh | bash
+          gh release download v2.1.0 -R mburakmmm/nox-lang -p "nox-lang-v2.1.0-linux-x64.tar.gz"
+          mkdir -p "$HOME/.nox-lang"
+          tar xzf nox-lang-v2.1.0-linux-x64.tar.gz -C "$HOME/.nox-lang" --strip-components=1
+          chmod +x "$HOME/.nox-lang/bin/"*
           echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
 
       - name: Resolve Release Tag & Version
