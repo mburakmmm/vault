@@ -1,0 +1,66 @@
+name: Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name to release (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-release:
+    name: Verify & Publish Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Zig for LLVM backend
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.17.0
+
+      - name: Static Type Check
+        run: |
+          noxc check vault.nox
+          noxc check cli/main.nox
+
+      - name: Run Test Suite (Dual Backends)
+        run: |
+          noxc test --backend llvm
+          noxc test --backend qbe
+
+      - name: Extract Release Notes
+        id: notes
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.ref_name }}".StartsWith("v")) { "${{ github.ref_name }}" } else { "${{ github.event.inputs.tag }}" }
+          $version = $tag.TrimStart("v")
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $regex = "(?ms)## \[$version\].*?(?=(?:## \[\d|\Z))"
+          if ($changelog -match $regex) {
+              $body = $matches[0].Trim()
+              Set-Content -Path "RELEASE_BODY.md" -Value $body
+          } else {
+              Set-Content -Path "RELEASE_BODY.md" -Value "## VAULT Release $tag`n`nProduction release for NOX ecosystem."
+          }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.tag }}
+          name: VAULT ${{ github.ref_name || github.event.inputs.tag }}
+          body_path: RELEASE_BODY.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

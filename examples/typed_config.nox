@@ -1,0 +1,20 @@
+# VAULT Example: Typed Schema Validation
+from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot
+from sources.memory import MemorySource
+
+schema: ConfigSchema = ConfigSchema()
+schema.add_string("APP_NAME", True, True, "MyBillingService", False, True)
+schema.add_int("MAX_WORKERS", True, True, 4, True, 1, True, 32, False)
+schema.add_bool("ENABLE_METRICS", False, True, True, False)
+
+mem: MemorySource = MemorySource("memory_defaults", 2, "base", False)
+mem.set_string("MAX_WORKERS", "8")
+
+builder: ConfigBuilder = ConfigBuilder()
+builder.with_schema(schema)
+builder.with_source(mem)
+
+snapshot: ConfigSnapshot = builder.build()
+print("App: " + snapshot.get_string("APP_NAME"))
+print("Workers: " + str(snapshot.get_int("MAX_WORKERS")))
+print("Metrics Enabled: " + ("yes" if snapshot.get_bool("ENABLE_METRICS") else "no"))

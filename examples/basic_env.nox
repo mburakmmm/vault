@@ -1,0 +1,11 @@
+# VAULT Example: Basic Dotenv Loading
+import vault
+from vault import DotenvSource, ConfigBuilder, ConfigSnapshot
+
+# Load isolated .env file
+builder: ConfigBuilder = ConfigBuilder()
+builder.with_dotenv(".env.example", True)
+
+snapshot: ConfigSnapshot = builder.build()
+print("APP_ENV=" + (snapshot.get_string("APP_ENV") if snapshot.has("APP_ENV") else "default"))
+print("HTTP_PORT=" + (str(snapshot.get_int("HTTP_PORT")) if snapshot.has("HTTP_PORT") else "8080"))
