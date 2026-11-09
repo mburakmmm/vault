@@ -5,6 +5,19 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8] - 2026-11-09
+
+### Added
+- Independent ecosystem adapters in `adapters/` for NOX ecosystem projects:
+  - `adapters/aether.nox`: HTTP server options (`host`, `port`, timeouts, payload size limits) with `AetherConfig` and `build_aether_schema`.
+  - `adapters/nyx.nox`: Web application options (`app_name`, `base_path`, `session_secret`, `debug_mode`) with `NyxConfig`, `build_nyx_schema`, and secret disclosure protection in `to_string()`.
+  - `adapters/feather.nox`: Database connection settings (`driver`, `host`, `port`, `database`, `user`, `password`, `pool_size`, `ssl_mode`) with `FeatherDbConfig`, `build_feather_schema`, and masked `connection_string()`.
+  - `adapters/noxen.nox`: Worker service options (`worker_name`, `concurrency`, `queue_name`, `max_retries`) with `NoxenConfig` and `build_noxen_schema`.
+  - `adapters/nova.nox`: Async event broker settings (`broker_url`, `client_id`, `api_token`, `retry_interval_ms`) with `NovaConfig`, `build_nova_schema`, and token redaction.
+- Public core isolation: VAULT core does not transitively import adapters or require third-party libraries.
+- Test suite `tests/adapters_test.nox` covering schema declaration, snapshot extraction, redaction guarantees, and core package isolation.
+- Verified 100% green across both LLVM (`zig 0.17.0`) and QBE compiler backends (18/18 test suites passing).
+
 ## [0.9.5] - 2026-11-09
 
 ### Added

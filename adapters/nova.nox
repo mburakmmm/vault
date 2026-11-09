@@ -1,0 +1,46 @@
+# VAULT — Nova Async Event Broker Configuration Adapter
+# Module: adapters.nova
+
+from core.snapshot import ConfigSnapshot
+from schema.fields import ConfigSchema
+import nox.strings
+
+class NovaConfig:
+    broker_url: str
+    client_id: str
+    api_token: str
+    retry_interval_ms: int
+
+    def __init__(self: NovaConfig, broker_url: str, client_id: str, api_token: str, retry_interval_ms: int) -> None:
+        self.broker_url = broker_url
+        self.client_id = client_id
+        self.api_token = api_token
+        self.retry_interval_ms = retry_interval_ms
+
+    def to_string(self: NovaConfig) -> str:
+        # api_token is NEVER disclosed in to_string
+        return "NovaConfig(broker='" + self.broker_url + "', client_id='" + self.client_id + "', token=[REDACTED], retry_ms=" + str(self.retry_interval_ms) + ")"
+
+def build_nova_schema(prefix: str) -> ConfigSchema:
+    schema: ConfigSchema = ConfigSchema()
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+    schema.add_string(p + "broker_url", True, False, "", False, True)
+    schema.add_string(p + "client_id", False, True, "nova_client", False, True)
+    schema.add_string(p + "api_token", True, False, "", True, True) # required, secret, non_blank
+    schema.add_int(p + "retry_interval_ms", False, True, 1000, True, 50, True, 60000, False)
+    return schema
+
+def extract_nova_config(snapshot: ConfigSnapshot, prefix: str) -> NovaConfig:
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+
+    broker_url: str = snapshot.get_string(p + "broker_url")
+    client_id: str = snapshot.get_string(p + "client_id") if snapshot.has(p + "client_id") else "nova_client"
+    # api_token is a secret
+    api_token: str = snapshot.get_secret(p + "api_token")
+    retry_interval_ms: int = snapshot.get_int(p + "retry_interval_ms") if snapshot.has(p + "retry_interval_ms") else 1000
+
+    return NovaConfig(broker_url, client_id, api_token, retry_interval_ms)

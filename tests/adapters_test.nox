@@ -1,0 +1,160 @@
+# VAULT — Ecosystem Adapters Test Suite
+# Tests: Aether, Nyx, Feather, Noxen, Nova and Core Isolation
+
+from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
+from schema.fields import ConfigSchema
+from sources.memory import MemorySource
+from adapters.aether import AetherConfig, build_aether_schema, extract_aether_config
+from adapters.nyx import NyxConfig, build_nyx_schema, extract_nyx_config
+from adapters.feather import FeatherDbConfig, build_feather_schema, extract_feather_config
+from adapters.noxen import NoxenConfig, build_noxen_schema, extract_noxen_config
+from adapters.nova import NovaConfig, build_nova_schema, extract_nova_config
+import vault
+
+def test_aether_adapter() -> None:
+    schema: ConfigSchema = build_aether_schema("http")
+
+    mem: MemorySource = MemorySource("test_aether", 9, "base", False)
+    mem.set_string("http.host", "0.0.0.0")
+    mem.set_string("http.port", "9090")
+    mem.set_string("http.read_timeout_ms", "10000")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(mem)
+
+    snapshot: ConfigSnapshot = builder.build()
+    cfg: AetherConfig = extract_aether_config(snapshot, "http")
+
+    assert cfg.host == "0.0.0.0"
+    assert cfg.port == 9090
+    assert cfg.read_timeout_ms == 10000
+    assert cfg.write_timeout_ms == 5000 # default
+    assert cfg.max_body_bytes == 1048576 # default
+
+    print("PASS: test_aether_adapter")
+
+def test_nyx_adapter() -> None:
+    schema: ConfigSchema = build_nyx_schema("web")
+
+    mem: MemorySource = MemorySource("test_nyx", 9, "base", False)
+    mem.set_string("web.app_name", "my_service")
+    mem.set_string("web.base_path", "/api/v1")
+    mem.set_string("web.session_secret", "super_nyx_session_secret_key_888")
+    mem.set_string("web.debug_mode", "false")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(mem)
+
+    snapshot: ConfigSnapshot = builder.build()
+    cfg: NyxConfig = extract_nyx_config(snapshot, "web")
+
+    assert cfg.app_name == "my_service"
+    assert cfg.base_path == "/api/v1"
+    assert cfg.session_secret == "super_nyx_session_secret_key_888"
+    assert not cfg.debug_mode
+
+    # Verify secret is masked in to_string()
+    str_repr: str = cfg.to_string()
+    assert "super_nyx_session_secret_key_888" not in str_repr
+    assert "[REDACTED]" in str_repr
+
+    print("PASS: test_nyx_adapter")
+
+def test_feather_adapter() -> None:
+    schema: ConfigSchema = build_feather_schema("db")
+
+    mem: MemorySource = MemorySource("test_feather", 9, "base", False)
+    mem.set_string("db.database", "production_app")
+    mem.set_string("db.user", "db_admin")
+    mem.set_string("db.password", "ultra_secret_db_pass_999")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(mem)
+
+    snapshot: ConfigSnapshot = builder.build()
+    cfg: FeatherDbConfig = extract_feather_config(snapshot, "db")
+
+    assert cfg.driver == "postgresql"
+    assert cfg.host == "127.0.0.1"
+    assert cfg.port == 5432
+    assert cfg.database == "production_app"
+    assert cfg.user == "db_admin"
+    assert cfg.password == "ultra_secret_db_pass_999"
+
+    # Redacted connection string
+    redacted_conn: str = cfg.connection_string(True)
+    assert "ultra_secret_db_pass_999" not in redacted_conn
+    assert "[REDACTED]" in redacted_conn
+    assert cfg.to_string() == redacted_conn
+
+    # Authorized unredacted connection string
+    real_conn: str = cfg.connection_string(False)
+    assert "ultra_secret_db_pass_999" in real_conn
+
+    print("PASS: test_feather_adapter")
+
+def test_noxen_adapter() -> None:
+    schema: ConfigSchema = build_noxen_schema("worker")
+
+    mem: MemorySource = MemorySource("test_noxen", 9, "base", False)
+    mem.set_string("worker.worker_name", "billing_processor")
+    mem.set_string("worker.concurrency", "8")
+    mem.set_string("worker.queue_name", "billing_queue")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(mem)
+
+    snapshot: ConfigSnapshot = builder.build()
+    cfg: NoxenConfig = extract_noxen_config(snapshot, "worker")
+
+    assert cfg.worker_name == "billing_processor"
+    assert cfg.concurrency == 8
+    assert cfg.queue_name == "billing_queue"
+    assert cfg.max_retries == 3
+
+    print("PASS: test_noxen_adapter")
+
+def test_nova_adapter() -> None:
+    schema: ConfigSchema = build_nova_schema("events")
+
+    mem: MemorySource = MemorySource("test_nova", 9, "base", False)
+    mem.set_string("events.broker_url", "amqp://events.internal:5672")
+    mem.set_string("events.api_token", "nova_auth_token_secret_456")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(mem)
+
+    snapshot: ConfigSnapshot = builder.build()
+    cfg: NovaConfig = extract_nova_config(snapshot, "events")
+
+    assert cfg.broker_url == "amqp://events.internal:5672"
+    assert cfg.client_id == "nova_client"
+    assert cfg.api_token == "nova_auth_token_secret_456"
+
+    # Masking check
+    str_repr: str = cfg.to_string()
+    assert "nova_auth_token_secret_456" not in str_repr
+    assert "[REDACTED]" in str_repr
+
+    print("PASS: test_nova_adapter")
+
+def test_core_isolation() -> None:
+    # Importing vault core is completely independent of adapter definitions
+    v: str = vault.version()
+    assert len(v) > 0
+    print("PASS: test_core_isolation")
+
+# Run all test functions
+test_aether_adapter()
+test_nyx_adapter()
+test_feather_adapter()
+test_noxen_adapter()
+test_nova_adapter()
+test_core_isolation()
+print("ALL ECOSYSTEM ADAPTER TESTS PASSED SUCCESSFULLY!")

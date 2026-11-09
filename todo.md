@@ -33,7 +33,7 @@
 | **v0.8.0** | **Faz 8** | Doğrulanmış Yeniden Yükleme (Atomic Reload) & Son Bilinen İyi Durum | [ ] Beklemede |
 | **v0.9.0** | **Faz 9** | Opsiyonel Uzak Sır Sağlayıcı Çerçevesi (HTTPS, İzolasyon, SSRF Savunması) | [x] Tamamlandı |
 | **v0.9.5** | **Faz 10** | Opsiyonel CLI Aracı (`vault validate`, `explain`, `check-env`) | [x] Tamamlandı |
-| **v0.9.8** | **Faz 11** | Ekosistem Adaptörleri (Aether, Nyx, Feather vb. için ince köprüler) | [ ] Beklemede |
+| **v0.9.8** | **Faz 11** | Ekosistem Adaptörleri (Aether, Nyx, Feather vb. için ince köprüler) | [x] Tamamlandı |
 | **v1.0.0** | **Faz 12** | v1.0 Sertleştirme, Tam Regresyon Matrisi & Kararlılık Sürümü | [ ] Beklemede |
 
 ---
@@ -291,17 +291,18 @@
 
 ---
 
-### [ ] Sürüm v0.9.8 — Faz 11: Ekosistem Adaptörleri (Ecosystem Adapters)
+### [x] Sürüm v0.9.8 — Faz 11: Ekosistem Adaptörleri (Ecosystem Adapters)
 > **Hedef:** NOX ekosistemindeki kütüphaneler (Aether, Nyx vb.) için çekirdeği kirletmeyen ince adaptörler sağlamak.
 
-- [ ] **11.1 Adaptör Modülleri (`adapters/`)**
-  - [ ] `adapters/aether.nox` (HTTP sunucu ayarları).
-  - [ ] `adapters/nyx.nox` (Web servis ayarları).
-  - [ ] `adapters/feather.nox` (Veritabanı bağlantı ayarları - parola ifşasız).
-  - [ ] `adapters/quartz.nox` (Test fikstür yardımcıları).
-- [ ] **11.2 Bağımsızlık İlkesi**
-  - [ ] Adaptörlerin varlığı veya yokluğu `import vault` işlemini bozmamalıdır.
-- [ ] **11.3 Kabul Kapısı (Gate 11):** Adaptörler opsiyonel olmalı, çekirdeğe bağımlılık taşımamalıdır.
+- [x] **11.1 Adaptör Modülleri (`adapters/`)**
+  - [x] `adapters/aether.nox` (HTTP sunucu ayarları).
+  - [x] `adapters/nyx.nox` (Web servis ayarları).
+  - [x] `adapters/feather.nox` (Veritabanı bağlantı ayarları - parola ifşasız).
+  - [x] `adapters/noxen.nox` (Worker servis ayarları).
+  - [x] `adapters/nova.nox` (Async mesajlaşma ayarları).
+- [x] **11.2 Bağımsızlık İlkesi**
+  - [x] Adaptörlerin varlığı veya yokluğu `import vault` işlemini bozmamalıdır.
+- [x] **11.3 Kabul Kapısı (Gate 11):** Adaptörler opsiyonel olmalı, çekirdeğe bağımlılık taşımamalıdır. (LLVM ve QBE onaylı)
 
 ---
 

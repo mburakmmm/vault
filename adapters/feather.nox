@@ -1,0 +1,66 @@
+# VAULT — Feather Database Connection Settings Adapter
+# Module: adapters.feather
+
+from core.snapshot import ConfigSnapshot
+from schema.fields import ConfigSchema
+import nox.strings
+
+class FeatherDbConfig:
+    driver: str
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+    pool_size: int
+    ssl_mode: str
+
+    def __init__(self: FeatherDbConfig, driver: str, host: str, port: int, database: str, user: str, password: str, pool_size: int, ssl_mode: str) -> None:
+        self.driver = driver
+        self.host = host
+        self.port = port
+        self.database = database
+        self.user = user
+        self.password = password
+        self.pool_size = pool_size
+        self.ssl_mode = ssl_mode
+
+    def connection_string(self: FeatherDbConfig, redact_pass: bool) -> str:
+        pwd: str = "[REDACTED]" if redact_pass else self.password
+        return self.driver + "://" + self.user + ":" + pwd + "@" + self.host + ":" + str(self.port) + "/" + self.database + "?sslmode=" + self.ssl_mode
+
+    def to_string(self: FeatherDbConfig) -> str:
+        # Default string representation is ALWAYS redacted
+        return self.connection_string(True)
+
+def build_feather_schema(prefix: str) -> ConfigSchema:
+    schema: ConfigSchema = ConfigSchema()
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+    schema.add_string(p + "driver", False, True, "postgresql", False, True)
+    schema.add_string(p + "host", False, True, "127.0.0.1", False, True)
+    schema.add_int(p + "port", False, True, 5432, True, 1, True, 65535, False)
+    schema.add_string(p + "database", True, False, "", False, True)
+    schema.add_string(p + "user", True, False, "", False, True)
+    schema.add_string(p + "password", True, False, "", True, True) # required, secret, non_blank
+    schema.add_int(p + "pool_size", False, True, 10, True, 1, True, 100, False)
+    schema.add_string(p + "ssl_mode", False, True, "require", False, True)
+    return schema
+
+def extract_feather_config(snapshot: ConfigSnapshot, prefix: str) -> FeatherDbConfig:
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+
+    driver: str = snapshot.get_string(p + "driver") if snapshot.has(p + "driver") else "postgresql"
+    host: str = snapshot.get_string(p + "host") if snapshot.has(p + "host") else "127.0.0.1"
+    port: int = snapshot.get_int(p + "port") if snapshot.has(p + "port") else 5432
+    database: str = snapshot.get_string(p + "database")
+    user: str = snapshot.get_string(p + "user")
+    # password is a secret
+    password: str = snapshot.get_secret(p + "password")
+    pool_size: int = snapshot.get_int(p + "pool_size") if snapshot.has(p + "pool_size") else 10
+    ssl_mode: str = snapshot.get_string(p + "ssl_mode") if snapshot.has(p + "ssl_mode") else "require"
+
+    return FeatherDbConfig(driver, host, port, database, user, password, pool_size, ssl_mode)

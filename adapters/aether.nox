@@ -1,0 +1,46 @@
+# VAULT — Aether HTTP Server Configuration Adapter
+# Module: adapters.aether
+
+from core.snapshot import ConfigSnapshot
+from schema.fields import ConfigSchema
+
+import nox.strings
+
+class AetherConfig:
+    host: str
+    port: int
+    read_timeout_ms: int
+    write_timeout_ms: int
+    max_body_bytes: int
+
+    def __init__(self: AetherConfig, host: str, port: int, read_timeout_ms: int, write_timeout_ms: int, max_body_bytes: int) -> None:
+        self.host = host
+        self.port = port
+        self.read_timeout_ms = read_timeout_ms
+        self.write_timeout_ms = write_timeout_ms
+        self.max_body_bytes = max_body_bytes
+
+def build_aether_schema(prefix: str) -> ConfigSchema:
+    schema: ConfigSchema = ConfigSchema()
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+    schema.add_string(p + "host", False, True, "127.0.0.1", False, True)
+    schema.add_int(p + "port", False, True, 8080, True, 1, True, 65535, False)
+    schema.add_int(p + "read_timeout_ms", False, True, 5000, True, 100, True, 300000, False)
+    schema.add_int(p + "write_timeout_ms", False, True, 5000, True, 100, True, 300000, False)
+    schema.add_int(p + "max_body_bytes", False, True, 1048576, True, 1024, True, 104857600, False)
+    return schema
+
+def extract_aether_config(snapshot: ConfigSnapshot, prefix: str) -> AetherConfig:
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+
+    host_val: str = snapshot.get_string(p + "host") if snapshot.has(p + "host") else "127.0.0.1"
+    port_val: int = snapshot.get_int(p + "port") if snapshot.has(p + "port") else 8080
+    r_to: int = snapshot.get_int(p + "read_timeout_ms") if snapshot.has(p + "read_timeout_ms") else 5000
+    w_to: int = snapshot.get_int(p + "write_timeout_ms") if snapshot.has(p + "write_timeout_ms") else 5000
+    m_body: int = snapshot.get_int(p + "max_body_bytes") if snapshot.has(p + "max_body_bytes") else 1048576
+
+    return AetherConfig(host_val, port_val, r_to, w_to, m_body)

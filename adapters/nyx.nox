@@ -1,0 +1,47 @@
+# VAULT — Nyx Web Service Configuration Adapter
+# Module: adapters.nyx
+
+from core.snapshot import ConfigSnapshot
+from schema.fields import ConfigSchema
+import nox.strings
+
+class NyxConfig:
+    app_name: str
+    base_path: str
+    session_secret: str
+    debug_mode: bool
+
+    def __init__(self: NyxConfig, app_name: str, base_path: str, session_secret: str, debug_mode: bool) -> None:
+        self.app_name = app_name
+        self.base_path = base_path
+        self.session_secret = session_secret
+        self.debug_mode = debug_mode
+
+    def to_string(self: NyxConfig) -> str:
+        dbg: str = "true" if self.debug_mode else "false"
+        # session_secret is ALWAYS masked in string representation
+        return "NyxConfig(app='" + self.app_name + "', base_path='" + self.base_path + "', session_secret=[REDACTED], debug=" + dbg + ")"
+
+def build_nyx_schema(prefix: str) -> ConfigSchema:
+    schema: ConfigSchema = ConfigSchema()
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+    schema.add_string(p + "app_name", False, True, "nyx_app", False, True)
+    schema.add_string(p + "base_path", False, True, "/", False, True)
+    schema.add_string(p + "session_secret", True, False, "", True, True) # required, secret, non_blank
+    schema.add_bool(p + "debug_mode", False, True, False, False)
+    return schema
+
+def extract_nyx_config(snapshot: ConfigSnapshot, prefix: str) -> NyxConfig:
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+
+    app_name: str = snapshot.get_string(p + "app_name") if snapshot.has(p + "app_name") else "nyx_app"
+    base_path: str = snapshot.get_string(p + "base_path") if snapshot.has(p + "base_path") else "/"
+    # session_secret is retrieved securely via get_secret
+    session_secret: str = snapshot.get_secret(p + "session_secret")
+    debug_mode: bool = snapshot.get_bool(p + "debug_mode") if snapshot.has(p + "debug_mode") else False
+
+    return NyxConfig(app_name, base_path, session_secret, debug_mode)

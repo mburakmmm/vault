@@ -1,0 +1,41 @@
+# VAULT — Noxen Worker / Microservice Configuration Adapter
+# Module: adapters.noxen
+
+from core.snapshot import ConfigSnapshot
+from schema.fields import ConfigSchema
+import nox.strings
+
+class NoxenConfig:
+    worker_name: str
+    concurrency: int
+    queue_name: str
+    max_retries: int
+
+    def __init__(self: NoxenConfig, worker_name: str, concurrency: int, queue_name: str, max_retries: int) -> None:
+        self.worker_name = worker_name
+        self.concurrency = concurrency
+        self.queue_name = queue_name
+        self.max_retries = max_retries
+
+def build_noxen_schema(prefix: str) -> ConfigSchema:
+    schema: ConfigSchema = ConfigSchema()
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+    schema.add_string(p + "worker_name", False, True, "default_worker", False, True)
+    schema.add_int(p + "concurrency", False, True, 4, True, 1, True, 256, False)
+    schema.add_string(p + "queue_name", False, True, "tasks", False, True)
+    schema.add_int(p + "max_retries", False, True, 3, True, 0, True, 20, False)
+    return schema
+
+def extract_noxen_config(snapshot: ConfigSnapshot, prefix: str) -> NoxenConfig:
+    p: str = prefix
+    if len(p) > 0 and not nox.strings.ends_with(p, "."):
+        p = p + "."
+
+    worker_name: str = snapshot.get_string(p + "worker_name") if snapshot.has(p + "worker_name") else "default_worker"
+    concurrency: int = snapshot.get_int(p + "concurrency") if snapshot.has(p + "concurrency") else 4
+    queue_name: str = snapshot.get_string(p + "queue_name") if snapshot.has(p + "queue_name") else "tasks"
+    max_retries: int = snapshot.get_int(p + "max_retries") if snapshot.has(p + "max_retries") else 3
+
+    return NoxenConfig(worker_name, concurrency, queue_name, max_retries)
