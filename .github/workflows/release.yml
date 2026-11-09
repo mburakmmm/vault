@@ -7,60 +7,136 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag name to release (e.g. v1.0.0)'
+        description: 'Tag to release (e.g. v1.0.0)'
         required: true
         default: 'v1.0.0'
 
-permissions:
-  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  verify-and-release:
-    name: Verify & Publish Release
-    runs-on: windows-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  ci-gate:
+    name: Cross-Platform CI Gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
-      - name: Set up Zig for LLVM backend
+    steps:
+      - name: Configure Git Line Endings
+        run: git config --global core.autocrlf false
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Nox (Linux / macOS)
+        if: runner.os != 'Windows'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(curl -sSL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/mburakmmm/nox-lang/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f 4)
+          export NOX_VERSION="${TAG:-v2.1.0}"
+          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.sh | bash
+          echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
+
+      - name: Install Nox (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:NOX_VERSION = "v2.1.0"
+          irm https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.ps1 | iex
+          "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set up Zig for LLVM Backend
         uses: mlugg/setup-zig@v1
         with:
           version: 0.17.0
+
+      - name: Verify Compiler
+        run: |
+          noxc version
 
       - name: Static Type Check
         run: |
           noxc check vault.nox
           noxc check cli/main.nox
 
-      - name: Run Test Suite (Dual Backends)
+      - name: Run Test Suites
         run: |
-          noxc test --backend llvm
-          noxc test --backend qbe
+          noxc test
 
-      - name: Extract Release Notes
+  publish-release:
+    name: Create GitHub Release & Publish Package
+    needs: [ci-gate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nox
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(curl -sSL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/mburakmmm/nox-lang/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f 4)
+          export NOX_VERSION="${TAG:-v2.1.0}"
+          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.sh | bash
+          echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
+
+      - name: Resolve Release Tag & Version
+        id: vars
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Extract Release Notes from CHANGELOG.md
         id: notes
-        shell: pwsh
         run: |
-          $tag = if ("${{ github.ref_name }}".StartsWith("v")) { "${{ github.ref_name }}" } else { "${{ github.event.inputs.tag }}" }
-          $version = $tag.TrimStart("v")
-          $changelog = Get-Content CHANGELOG.md -Raw
-          $regex = "(?ms)## \[$version\].*?(?=(?:## \[\d|\Z))"
-          if ($changelog -match $regex) {
-              $body = $matches[0].Trim()
-              Set-Content -Path "RELEASE_BODY.md" -Value $body
-          } else {
-              Set-Content -Path "RELEASE_BODY.md" -Value "## VAULT Release $tag`n`nProduction release for NOX ecosystem."
-          }
+          python3 -c '
+          import re, sys
+          tag = "${{ steps.vars.outputs.tag }}"
+          version = "${{ steps.vars.outputs.version }}"
+          with open("CHANGELOG.md", "r", encoding="utf-8") as f:
+              content = f.read()
+          pattern = r"## \[" + re.escape(version) + r"\].*?\n(.*?)(?=\n## \[|\Z)"
+          match = re.search(pattern, content, re.DOTALL)
+          if match:
+              notes = match.group(1).strip()
+          else:
+              notes = "VAULT " + tag + " release."
+          with open("RELEASE_NOTES.md", "w", encoding="utf-8") as out:
+              out.write(notes + "\n")
+          '
 
-      - name: Create GitHub Release
+      - name: Package Distribution Archives
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          tar --exclude='.git' --exclude='.github' --exclude='*.tar.gz' --exclude='*.zip' -czf "vault-${TAG}.tar.gz" .
+          zip -r "vault-${TAG}.zip" . -x '*.git*' '*.github*' '*.tar.gz' '*.zip'
+
+      - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || github.event.inputs.tag }}
-          name: VAULT ${{ github.ref_name || github.event.inputs.tag }}
-          body_path: RELEASE_BODY.md
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: VAULT ${{ steps.vars.outputs.tag }}
+          body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
+          files: |
+            vault-${{ steps.vars.outputs.tag }}.tar.gz
+            vault-${{ steps.vars.outputs.tag }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

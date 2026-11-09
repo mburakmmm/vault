@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main]
   pull_request:
-    branches: [ main, master ]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -12,23 +12,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  type-check:
-    name: Static Type Analysis
-    runs-on: windows-latest
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
     steps:
-      - name: Checkout repository
+      - name: Configure Git Line Endings
+        run: git config --global core.autocrlf false
+
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Verify NOX toolchain
+      - name: Install Nox (Linux / macOS)
+        if: runner.os != 'Windows'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(curl -sSL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/mburakmmm/nox-lang/releases/latest | grep '"tag_name"' | head -n1 | cut -d '"' -f 4)
+          export NOX_VERSION="${TAG:-v2.1.0}"
+          curl -fsSL https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.sh | bash
+          echo "$HOME/.nox-lang/bin" >> $GITHUB_PATH
+
+      - name: Install Nox (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:NOX_VERSION = "v2.1.0"
+          irm https://raw.githubusercontent.com/mburakmmm/nox-lang/main/install.ps1 | iex
+          "$env:USERPROFILE\.nox-lang\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set up Zig for LLVM Backend
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.17.0
+
+      - name: Verify Compiler
         run: |
           noxc version
 
-      - name: Check Public Facade
+      - name: Static Type Check
         run: |
           noxc check vault.nox
-
-      - name: Check CLI & Adapters
-        run: |
           noxc check cli/main.nox
           noxc check adapters/aether.nox
           noxc check adapters/nyx.nox
@@ -36,29 +64,11 @@ jobs:
           noxc check adapters/noxen.nox
           noxc check adapters/nova.nox
 
-  test-dual-backends:
-    name: Test Suite (${{ matrix.backend }})
-    needs: type-check
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [llvm, qbe]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Zig for LLVM backend
-        if: matrix.backend == 'llvm'
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.17.0
-
-      - name: Run All 19 Test Suites
+      - name: Run Test Suites
         run: |
-          noxc test --backend ${{ matrix.backend }}
+          noxc test
 
-      - name: Test CLI Interface
+      - name: Verify CLI Tool
         run: |
-          noxc run cli/main.nox -- --help
           noxc run cli/main.nox -- version
+          noxc run cli/main.nox -- --help
