@@ -2,6 +2,51 @@
 
 ---
 
+## 🚀 VAULT v1.0.10 Patch Release (Completed & Verified)
+
+Addressing findings from the v1.0.9 technical review:
+
+### 🚨 P0 / P1: Network & SSRF Security — Capability-Based Pinning & Isolated DnsResolutionResult
+
+- [x] **NET-15: Capability-Based Transport Verification (`supports_socket_pinning()`, `supports_tls_server_name()`)**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Added `supports_socket_pinning() -> bool` and `supports_tls_server_name() -> bool` methods to `HttpTransport` interface.
+    2. In `RemoteHttpSecretProvider.__init__`, replaced name-based string matching (`transport_name == "standard_nox_http"`) with capability checks (`not transport.supports_socket_pinning()`).
+    3. Guarantees that any custom or third-party transport lacking true socket pinning capability is safely intercepted and replaced with `StrictPinnedHttpTransport()`, failing closed immediately in strict environments.
+  - **Status:** Complete & Verified
+
+- [x] **NET-16: Isolated, Thread-Safe `DnsResolutionResult` Value Object**
+  - **File:** `providers/remote_http.nox`, `vault.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Introduced `DnsResolutionResult` record containing `addresses: list[str]`, `success: bool`, `error_code: str`, `error_message: str`, and `exit_code: int`.
+    2. Implemented `resolve_detailed(host: str) -> DnsResolutionResult` on `DnsResolver`, `StaticDnsResolver`, and `SystemDnsResolver`.
+    3. Re-routed `RemoteHttpSecretProvider.get()` to consume `resolve_detailed()`, eliminating cross-request mutable state contamination on shared resolver instances.
+    4. Preserved backward-compatible `resolve(host: str) -> list[str]` which delegates to `resolve_detailed()`.
+  - **Status:** Complete & Verified
+
+### 🔒 P1: Concurrency & State Atomicity — Hardware-Coherent Version Synchronization
+
+- [x] **RELOAD-09: Atomic Hardware-Coherent Version Synchronization Barrier**
+  - **File:** `reload/manager.nox`, `tests/reload_test.nox`
+  - **Remediation:**
+    1. Added `_atomic_version: AtomicInt` using `nox.atomic.new_int` to `ReloadManager`.
+    2. Synchronized `_atomic_version.store(next_version_num)` alongside snapshot publication with full CPU cache coherence.
+    3. Added `get_atomic_version() -> int` providing atomic hardware reads.
+    4. Tested cross-worker publication and atomic version synchronization in `tests/reload_test.nox`.
+  - **Status:** Complete & Verified
+
+### 📦 P2: Packaging & Integration Consistency
+
+- [x] **DIST-06: Package Distribution Integrity & Clean Registry Install Simulation (v1.0.10)**
+  - **File:** `nox.json`, `vault.nox`, `cli/main.nox`, `tests/cli_test.nox`, `tests/package_consumer_test.nox`, `tests/package_test.nox`, `tests/regression_matrix_test.nox`, `README.md`, `CHANGELOG.md`, `docs/security.md`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+  - **Remediation:**
+    1. Bumped versions to `1.0.10` across all files, workflows, and tests.
+    2. Verified compiler type-checks, local QBE and LLVM test suites, and remote CI workflows.
+  - **Status:** Complete & Verified
+
+---
+
 ## 🚀 VAULT v1.0.9 Patch Release (Completed & Verified)
 
 Addressing findings from the v1.0.8 technical review:

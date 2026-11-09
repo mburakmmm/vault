@@ -8,7 +8,7 @@ from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG
 from schema.fields import ConfigSchema
 from secrets.mark import SecretValue
 from providers.interface import SecretFetchResult, ProviderHealth
-from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, StandardHttpTransport, StrictPinnedHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host, is_ip_literal, is_valid_hostname, DnsResolver, StaticDnsResolver, SystemDnsResolver
+from providers.remote_http import RemoteHttpSecretProvider, HttpTransport, MockHttpTransport, StandardHttpTransport, StrictPinnedHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host, is_ip_literal, is_valid_hostname, DnsResolver, StaticDnsResolver, SystemDnsResolver, DnsResolutionResult
 import nox.strings
 
 def make_test_dns() -> StaticDnsResolver:
@@ -611,6 +611,87 @@ def test_system_dns_resolver_contract() -> None:
 
     print("PASS: test_system_dns_resolver_contract")
 
+def test_net_15_transport_capabilities() -> None:
+    # 1. Base and standard transports do not support socket pinning
+    base_t: HttpTransport = HttpTransport("custom_base")
+    assert not base_t.supports_socket_pinning()
+    assert not base_t.supports_tls_server_name()
+
+    std_t: StandardHttpTransport = StandardHttpTransport()
+    assert not std_t.supports_socket_pinning()
+    assert not std_t.supports_tls_server_name()
+
+    strict_t: StrictPinnedHttpTransport = StrictPinnedHttpTransport()
+    assert not strict_t.supports_socket_pinning()
+    assert not strict_t.supports_tls_server_name()
+
+    # 2. Mock transport reflects configurable capabilities
+    mock_pinning: MockHttpTransport = MockHttpTransport(True, True)
+    assert mock_pinning.supports_socket_pinning()
+    assert mock_pinning.supports_tls_server_name()
+
+    mock_unpinned: MockHttpTransport = MockHttpTransport(False, False)
+    assert not mock_unpinned.supports_socket_pinning()
+    assert not mock_unpinned.supports_tls_server_name()
+
+    # 3. RemoteHttpSecretProvider with strict_pinning intercepts non-pinning transports
+    allowlist: list[str] = ["vault.corp.internal"]
+    prov_intercept: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "p_strict",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "Authorization",
+        "tok_123",
+        mock_unpinned, # Has supports_socket_pinning() == False
+        make_test_dns(),
+        True # strict_pinning=True
+    )
+    # Replaced with StrictPinnedHttpTransport
+    assert prov_intercept.transport.transport_name == "strict_socket_pinned"
+
+    # 4. Pinning-capable transport is preserved when strict_pinning is enabled
+    prov_keep: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "p_keep",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "Authorization",
+        "tok_123",
+        mock_pinning, # Has supports_socket_pinning() == True
+        make_test_dns(),
+        True
+    )
+    assert prov_keep.transport.transport_name == "mock"
+
+    print("PASS: test_net_15_transport_capabilities")
+
+def test_net_16_dns_resolution_result() -> None:
+    # 1. Base DnsResolver detailed result
+    base_dns: DnsResolver = DnsResolver("test_base")
+    r1: DnsResolutionResult = base_dns.resolve_detailed("example.com")
+    assert not r1.success
+    assert len(r1.addresses) == 0
+    assert r1.error_code == "DNS_BASE_RESOLVER_NO_RECORDS"
+
+    # 2. Static resolver detailed result
+    static_dns: StaticDnsResolver = StaticDnsResolver()
+    static_dns.add_record("app.internal", ["198.51.100.1", "198.51.100.2"])
+    r2: DnsResolutionResult = static_dns.resolve_detailed("app.internal")
+    assert r2.success
+    assert len(r2.addresses) == 2
+    assert r2.addresses[0] == "198.51.100.1"
+
+    r3: DnsResolutionResult = static_dns.resolve_detailed("missing.internal")
+    assert not r3.success
+    assert r3.error_code == "STATIC_DNS_UNMAPPED_HOST"
+
+    # 3. IP literal bypass
+    r4: DnsResolutionResult = static_dns.resolve_detailed("198.51.100.50")
+    assert r4.success
+    assert len(r4.addresses) == 1
+    assert r4.addresses[0] == "198.51.100.50"
+
+    print("PASS: test_net_16_dns_resolution_result")
+
 # Run all test functions
 test_ssrf_and_scheme_validation()
 test_hermetic_fetch_success()
@@ -626,4 +707,6 @@ test_net_10_strict_socket_pinning_transport()
 test_net_09_dns_failure_fails_closed()
 test_net_11_dns_rebinding_simulation()
 test_system_dns_resolver_contract()
+test_net_15_transport_capabilities()
+test_net_16_dns_resolution_result()
 print("ALL REMOTE HTTP PROVIDER TESTS PASSED SUCCESSFULLY!")

@@ -82,9 +82,11 @@ When consuming remote HTTPS secret stores:
    - `RemoteHttpSecretProvider` resolves hostnames via `DnsResolver` prior to issuing network requests.
    - If any resolved IP belongs to a prohibited or private range, the provider fails closed with `ERR_CONFIG_PROVIDER_UNAVAILABLE` before touching the network transport.
 
-5. **TLS-Aware Pinning & Upstream Standard Library Protocol (NET-05 / NET-07 / NET-09 / NET-10 / NET-12 / NET-13):**
+5. **TLS-Aware Pinning & Upstream Standard Library Protocol (NET-05 / NET-07 / NET-09 / NET-10 / NET-12 / NET-13 / NET-15 / NET-16):**
    - In accordance with TLS RFC specifications, replacing a URL host with an IP address breaks TLS certificate validation when certificates lack IP Subject Alternative Names (SANs).
    - VAULT maintains the authentic HTTPS URL (`https://<hostname>/<path>`) and transmits `Host: <hostname>`, while explicitly passing `connect_ip` and `tls_server_name` to `HttpTransport.send_request`.
+   - **Capability-Based Transport Pinning (NET-15):** Rather than superficial string class name matching, `HttpTransport` provides `supports_socket_pinning() -> bool` and `supports_tls_server_name() -> bool`. In strict pinning mode (`strict_pinning=True`), any transport where `supports_socket_pinning() == False` is intercepted and replaced with `StrictPinnedHttpTransport()`, ensuring fail-closed operation across arbitrary third-party transport instances.
+   - **Isolated Immutable DnsResolutionResult (NET-16):** DNS resolutions are returned via dedicated `DnsResolutionResult` records (`addresses`, `success`, `error_code`, `error_message`, `exit_code`), preventing race conditions or mutable state leakage between concurrent queries on shared resolver instances.
    - **Strict Socket Pinning Separation & Transport Enforcement (NET-10 / NET-14):** Dedicated `StrictPinnedHttpTransport` unconditionally fails closed with `ERR_CONFIG_PROVIDER_UNAVAILABLE` when running on standard `nox.http` without raw socket IP binding primitives. When `strict_pinning=True` is configured on `RemoteHttpSecretProvider`, any unpinned transport is automatically intercepted and swapped to fail closed.
    - **System DNS Hostname Resolution & Fail-Closed Policy (NET-09 / NET-13):** Only genuine IP literals (`is_ip_literal`) bypass DNS lookup. Hostnames are strictly resolved via OS-level resolution (`nslookup`) in `SystemDnsResolver`. If resolution fails or returns zero addresses, the resolver fails closed by returning an empty list (`[]`), recording structured diagnostic error telemetry (`last_error`, `last_exit_code`) without disclosing secret values.
    - **Exact RFC 4291 & 32-Bit IPv4 Literal Parser (NET-12):** `is_ip_literal` directly invokes mathematical 128-bit IPv6 and 32-bit IPv4 parsers rather than superficial substrings, strictly rejecting malformed IP representations (`256.1.1.1`, `2001:4860:::8888`, `:2001::1`).
@@ -93,12 +95,13 @@ When consuming remote HTTPS secret stores:
 
 ---
 
-## 6. Atomic Concurrency & Unified Immutable Publication (RELOAD-04 / RELOAD-05 / RELOAD-06 / RELOAD-07 / RELOAD-08)
+## 6. Atomic Concurrency & Unified Immutable Publication (RELOAD-04 / RELOAD-05 / RELOAD-06 / RELOAD-07 / RELOAD-08 / RELOAD-09)
 
 1. **Hardware-Level Atomic CAS Coordination & Race Elimination (RELOAD-06 / RELOAD-08):**
    - `ReloadManager` reload execution is guarded by `nox.atomic.new_bool(False)` utilizing `compare_and_swap(False, True)`.
    - `current_pub: PublishedConfig = self._published` is read strictly *after* acquiring the CAS lock, eliminating the race window where concurrent writers could read a stale snapshot and compute duplicate version numbers.
    - Multi-worker tests verify 100% lockstep completion of all sequential reload cycles (`writer_reloads == 5`, `version == 6`) with zero torn configurations observed by reader fibers.
+   - **Hardware Memory-Barrier Version Synchronization (RELOAD-09):** An `_atomic_version: AtomicInt` is maintained alongside `PublishedConfig`. `get_atomic_version() -> int` performs atomic hardware-level reads, providing cross-thread CPU cache coherence guarantees during concurrent execution.
 
 2. **Truly Immutable Publication Record (`PublishedConfig`):**
    - Version number, immutable snapshot, epoch timestamp, and reload count are encapsulated in `PublishedConfig`.

@@ -4,7 +4,7 @@
 from core.builder import ConfigBuilder
 from core.snapshot import ConfigSnapshot
 from core.errors import ConfigError
-from nox.atomic import new_bool, AtomicBool
+from nox.atomic import new_bool, AtomicBool, new_int, AtomicInt
 import nox.time
 
 class PublishedConfig:
@@ -58,12 +58,14 @@ class ReloadManager:
     reload_count: int
     failed_reloads: int
     _atomic_reloading: AtomicBool
+    _atomic_version: AtomicInt
 
     def __init__(self: ReloadManager, builder: ConfigBuilder) -> None:
         self.builder = builder
         self.reload_count = 0
         self.failed_reloads = 0
         self._atomic_reloading = new_bool(False)
+        self._atomic_version = new_int(1)
         self.builder.builder_version = "v1"
         initial_snap: ConfigSnapshot = self.builder.build()
         now_ts: int = nox.time.now_ms()
@@ -93,6 +95,10 @@ class ReloadManager:
     def get_version(self: ReloadManager) -> int:
         return self._published.version
 
+    def get_atomic_version(self: ReloadManager) -> int:
+        # RELOAD-09: Hardware memory-barrier synchronized atomic integer read
+        return self._atomic_version.load()
+
     def reload(self: ReloadManager) -> ReloadResult:
         # RELOAD-06: Atomic CAS Lock MUST be acquired BEFORE reading current_pub
         # Guarantees strictly one thread/worker enters the critical section,
@@ -110,10 +116,11 @@ class ReloadManager:
             # 1. Build complete candidate snapshot off to the side
             candidate: ConfigSnapshot = self.builder.build()
 
-            # 2. RELOAD-05: Publish new snapshot and version atomically with real timestamp
+            # 2. RELOAD-05 & RELOAD-09: Publish new snapshot and version atomically with real timestamp and hardware barrier
             now_reload: int = nox.time.now_ms()
             new_pub: PublishedConfig = PublishedConfig(next_version_num, candidate, now_reload, self.reload_count)
             self._published = new_pub  # Atomic reference assignment
+            self._atomic_version.store(next_version_num) # Hardware-coherent atomic version barrier
             self._atomic_reloading.store(False)  # Atomic release barrier
             return ReloadResult(True, new_pub.version, "", "", new_pub.snapshot)
 

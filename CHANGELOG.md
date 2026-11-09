@@ -5,6 +5,24 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.10] - 2026-11-09 (Capability-Based Transport Pinning, Immutable DnsResolutionResult, Atomic Hardware Memory Barrier & Clean Registry Simulation)
+
+### Added
+- **Capability-Based Transport Pinning Verification (NET-15):**
+  - Added object-oriented capability inspection methods `supports_socket_pinning() -> bool` and `supports_tls_server_name() -> bool` to `HttpTransport` interface.
+  - Replaced name-based transport matching (`transport_name == "standard_nox_http"`) in `RemoteHttpSecretProvider.__init__` with capability checks: any transport with `supports_socket_pinning() == False` is intercepted and replaced with `StrictPinnedHttpTransport()` when `strict_pinning=True` is requested.
+- **Isolated Thread-Safe DnsResolutionResult Value Object (NET-16):**
+  - Introduced `DnsResolutionResult` record containing `addresses: list[str]`, `success: bool`, `error_code: str`, `error_message: str`, and `exit_code: int`.
+  - Added `resolve_detailed(host: str) -> DnsResolutionResult` to `DnsResolver`, `StaticDnsResolver`, and `SystemDnsResolver`.
+  - Re-routed `RemoteHttpSecretProvider` to consume `resolve_detailed()`, eliminating cross-request mutable state contamination on shared resolver instances.
+- **Atomic Hardware-Coherent Version Synchronization Barrier (RELOAD-09):**
+  - Added `_atomic_version: AtomicInt` using `nox.atomic.new_int` to `ReloadManager`.
+  - Integrated `get_atomic_version() -> int` providing hardware cache-coherent atomic integer reads across threads and worker fibers.
+
+### Fixed
+- **Packaging and Consumer Integrity Verification (DIST-06):**
+  - Verified package consumer and external integration test suite with atomic version assertions and zero-dependency standalone consumption.
+
 ## [1.0.9] - 2026-11-09 (Exact RFC 4291 IP Literal Parser, Structured DNS Telemetry, Strict Pinning Enforcement & 100% Worker Publication Lockstep)
 
 ### Fixed

@@ -346,6 +346,8 @@ async def worker_thread_reader(worker_id: int) -> int:
     while read_count < 100:
         pub: PublishedConfig = mgr_worker.get_published()
         v: int = pub.version
+        atomic_v: int = mgr_worker.get_atomic_version()
+        assert atomic_v >= v, "Atomic version barrier must be at least published version"
         snap: ConfigSnapshot = pub.snapshot
         s_name: str = snap.get_string("SERVICE_NAME")
         s_port: int = snap.get_int("WORKER_PORT")
@@ -395,6 +397,7 @@ assert w3_count == 100
 # RELOAD-08: Every single one of the 5 sequential reload cycles must succeed completely!
 assert writer_reloads == 5, "All 5 sequential reload cycles must succeed; got " + str(writer_reloads)
 assert mgr_worker.get_version() == 6, "Final published version must reach exact target version 6; got " + str(mgr_worker.get_version())
+assert mgr_worker.get_atomic_version() == 6, "Final atomic hardware version must reach exact target version 6; got " + str(mgr_worker.get_atomic_version())
 final_snap: ConfigSnapshot = mgr_worker.snapshot()
 assert final_snap.get_string("SERVICE_NAME") == "WorkerApp_v6"
 assert final_snap.get_int("WORKER_PORT") == 8006

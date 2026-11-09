@@ -30,6 +30,12 @@ class HttpTransport:
     def __init__(self: HttpTransport, name: str) -> None:
         self.transport_name = name
 
+    def supports_socket_pinning(self: HttpTransport) -> bool:
+        return False
+
+    def supports_tls_server_name(self: HttpTransport) -> bool:
+        return False
+
     def send_request(self: HttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
         empty_h: dict[str, str] = {}
         return HttpResponse(500, empty_h, "base transport unimplemented", False, "")
@@ -40,6 +46,12 @@ class StandardHttpTransport(HttpTransport):
     def __init__(self: StandardHttpTransport, enforce_socket_pinning: bool = False) -> None:
         self.transport_name = "standard_nox_http"
         self.enforce_socket_pinning = enforce_socket_pinning
+
+    def supports_socket_pinning(self: StandardHttpTransport) -> bool:
+        return False
+
+    def supports_tls_server_name(self: StandardHttpTransport) -> bool:
+        return False
 
     def send_request(self: StandardHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
         # NET-07: If socket-level IP pinning is strictly required by caller policy,
@@ -72,8 +84,14 @@ class StrictPinnedHttpTransport(HttpTransport):
     def __init__(self: StrictPinnedHttpTransport) -> None:
         self.transport_name = "strict_socket_pinned"
 
+    def supports_socket_pinning(self: StrictPinnedHttpTransport) -> bool:
+        return False
+
+    def supports_tls_server_name(self: StrictPinnedHttpTransport) -> bool:
+        return False
+
     def send_request(self: StrictPinnedHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
-        # NET-10: Strict Socket Pinning Contract
+        # NET-10 / NET-15: Strict Socket Pinning Contract
         # Standard nox.http does not expose raw socket-level IP binding.
         # Strict mode mandates that without an underlying pinning-capable socket transport,
         # connection must fail closed immediately to eliminate DNS rebinding risk.
@@ -90,8 +108,10 @@ class MockHttpTransport(HttpTransport):
     last_requested_url: str
     last_connect_ip: str
     last_tls_server_name: str
+    can_pin_socket: bool
+    can_tls_sni: bool
 
-    def __init__(self: MockHttpTransport) -> None:
+    def __init__(self: MockHttpTransport, can_pin_socket: bool = True, can_tls_sni: bool = True) -> None:
         self.transport_name = "mock"
         self.routes = {}
         self.call_count = 0
@@ -99,6 +119,14 @@ class MockHttpTransport(HttpTransport):
         self.last_requested_url = ""
         self.last_connect_ip = ""
         self.last_tls_server_name = ""
+        self.can_pin_socket = can_pin_socket
+        self.can_tls_sni = can_tls_sni
+
+    def supports_socket_pinning(self: MockHttpTransport) -> bool:
+        return self.can_pin_socket
+
+    def supports_tls_server_name(self: MockHttpTransport) -> bool:
+        return self.can_tls_sni
 
     def add_route(self: MockHttpTransport, url: str, status_code: int, body: str, redirect_location: str) -> None:
         is_redir: bool = status_code == 301 or status_code == 302 or status_code == 307 or status_code == 308
@@ -550,6 +578,20 @@ def is_valid_hostname(host: str) -> bool:
 
     return True
 
+class DnsResolutionResult:
+    addresses: list[str]
+    success: bool
+    error_code: str
+    error_message: str
+    exit_code: int
+
+    def __init__(self: DnsResolutionResult, addresses: list[str], success: bool, error_code: str = "", error_message: str = "", exit_code: int = 0) -> None:
+        self.addresses = addresses
+        self.success = success
+        self.error_code = error_code
+        self.error_message = error_message
+        self.exit_code = exit_code
+
 class DnsResolver:
     resolver_name: str
     last_error: str
@@ -560,16 +602,20 @@ class DnsResolver:
         self.last_error = ""
         self.last_exit_code = 0
 
-    def resolve(self: DnsResolver, host: str) -> list[str]:
-        # NET-09 / NET-12: Fail-closed base resolver with diagnostic tracking
-        self.last_error = ""
-        self.last_exit_code = 0
+    def resolve_detailed(self: DnsResolver, host: str) -> DnsResolutionResult:
+        # NET-16: Pure, isolated resolution result value object
         if is_ip_literal(host):
             res_lit: list[str] = [host]
-            return res_lit
-        self.last_error = "DNS_BASE_RESOLVER_NO_RECORDS"
+            return DnsResolutionResult(res_lit, True, "", "", 0)
         res_empty: list[str] = []
-        return res_empty
+        return DnsResolutionResult(res_empty, False, "DNS_BASE_RESOLVER_NO_RECORDS", "base resolver has no records", 0)
+
+    def resolve(self: DnsResolver, host: str) -> list[str]:
+        # Backward-compatible delegation
+        res: DnsResolutionResult = self.resolve_detailed(host)
+        self.last_error = res.error_code
+        self.last_exit_code = res.exit_code
+        return res.addresses
 
 class StaticDnsResolver(DnsResolver):
     records: dict[str, list[str]]
@@ -583,17 +629,20 @@ class StaticDnsResolver(DnsResolver):
     def add_record(self: StaticDnsResolver, host: str, ips: list[str]) -> None:
         self.records[host] = ips
 
-    def resolve(self: StaticDnsResolver, host: str) -> list[str]:
-        self.last_error = ""
-        self.last_exit_code = 0
+    def resolve_detailed(self: StaticDnsResolver, host: str) -> DnsResolutionResult:
         if is_ip_literal(host):
             res_lit: list[str] = [host]
-            return res_lit
+            return DnsResolutionResult(res_lit, True, "", "", 0)
         if host in self.records:
-            return self.records[host]
-        self.last_error = "STATIC_DNS_UNMAPPED_HOST"
+            return DnsResolutionResult(self.records[host], True, "", "", 0)
         res_empty: list[str] = []
-        return res_empty
+        return DnsResolutionResult(res_empty, False, "STATIC_DNS_UNMAPPED_HOST", "no static mapping for host", 0)
+
+    def resolve(self: StaticDnsResolver, host: str) -> list[str]:
+        res: DnsResolutionResult = self.resolve_detailed(host)
+        self.last_error = res.error_code
+        self.last_exit_code = res.exit_code
+        return res.addresses
 
 class SystemDnsResolver(DnsResolver):
     def __init__(self: SystemDnsResolver) -> None:
@@ -601,19 +650,20 @@ class SystemDnsResolver(DnsResolver):
         self.last_error = ""
         self.last_exit_code = 0
 
-    def resolve(self: SystemDnsResolver, host: str) -> list[str]:
-        self.last_error = ""
-        self.last_exit_code = 0
-
+    def resolve_detailed(self: SystemDnsResolver, host: str) -> DnsResolutionResult:
         # NET-12: Only genuine IP literals bypass OS DNS lookup!
         if is_ip_literal(host):
             res_ip: list[str] = [host]
-            return res_ip
+            return DnsResolutionResult(res_ip, True, "", "", 0)
 
         resolved: list[str] = []
+        exit_code: int = 0
+        err_code: str = ""
+        err_msg: str = ""
+
         try:
             out: Output = Command("nslookup").arg(host).run()
-            self.last_exit_code = out.status
+            exit_code = out.status
             if out.success():
                 lines: list[str] = nox.strings.split(out.stdout, "\n")
                 seen_name: bool = False
@@ -630,28 +680,33 @@ class SystemDnsResolver(DnsResolver):
                             c_idx2: int = nox.strings.index_of(trimmed, ":")
                             cand = nox.strings.trim(trimmed[c_idx2 + 1:len(trimmed)])
                         elif is_ip_literal(trimmed):
-                            # Continuation lines in Windows nslookup under 'Addresses:'
                             cand = trimmed
 
                         if len(cand) > 0:
-                            # Strip any port or comment delimiter e.g. '#53'
                             hash_idx: int = nox.strings.index_of(cand, "#")
                             if hash_idx >= 0:
                                 cand = nox.strings.trim(cand[0:hash_idx])
-                            # Full A or AAAA IPv6 literal preserved without colon truncation
                             if is_ip_literal(cand) and cand not in resolved:
                                 resolved.append(cand)
 
                 if len(resolved) == 0:
-                    self.last_error = "DNS_NO_ADDRESS_RECORDS"
+                    err_code = "DNS_NO_ADDRESS_RECORDS"
+                    err_msg = "nslookup succeeded but returned no valid A or AAAA records"
             else:
-                self.last_error = "DNS_QUERY_FAILED: status=" + str(out.status)
+                err_code = "DNS_QUERY_FAILED: status=" + str(out.status)
+                err_msg = "nslookup command failed with non-zero exit status"
         except Exception:
-            self.last_error = "DNS_EXECUTABLE_UNAVAILABLE_OR_SPAWN_ERROR"
+            err_code = "DNS_EXECUTABLE_UNAVAILABLE_OR_SPAWN_ERROR"
+            err_msg = "unable to execute nslookup command"
 
-        # FAIL CLOSED: If resolution produced zero addresses, return empty list!
-        # NEVER return [host] fallback!
-        return resolved
+        is_success: bool = len(resolved) > 0
+        return DnsResolutionResult(resolved, is_success, err_code, err_msg, exit_code)
+
+    def resolve(self: SystemDnsResolver, host: str) -> list[str]:
+        res: DnsResolutionResult = self.resolve_detailed(host)
+        self.last_error = res.error_code
+        self.last_exit_code = res.exit_code
+        return res.addresses
 
 def _extract_authority(https_url: str) -> str:
     # URL is verified to start with https:// (len 8)
@@ -770,7 +825,7 @@ class RemoteHttpSecretProvider(SecretProvider):
         self.strict_pinning = strict_pinning
 
         if transport is not None:
-            if strict_pinning and transport.transport_name == "standard_nox_http":
+            if strict_pinning and not transport.supports_socket_pinning():
                 self.transport = StrictPinnedHttpTransport()
             else:
                 self.transport = transport
@@ -822,12 +877,15 @@ class RemoteHttpSecretProvider(SecretProvider):
                         host = authority[0:c_idx]
                         port = authority[c_idx + 1:len(authority)]
 
-                resolved_ips: list[str] = self.dns_resolver.resolve(host)
-                if len(resolved_ips) == 0:
+                # NET-16: Use isolated DnsResolutionResult to prevent cross-request mutable state contamination
+                dns_res: DnsResolutionResult = self.dns_resolver.resolve_detailed(host)
+                if not dns_res.success or len(dns_res.addresses) == 0:
                     diag: str = "DNS resolution failed or produced zero addresses: rejected fail-closed"
-                    if len(self.dns_resolver.last_error) > 0:
-                        diag = diag + " (" + self.dns_resolver.last_error + ")"
+                    if len(dns_res.error_code) > 0:
+                        diag = diag + " (" + dns_res.error_code + ")"
                     return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, diag, self.id)
+
+                resolved_ips: list[str] = dns_res.addresses
 
                 r_idx: int = 0
                 while r_idx < len(resolved_ips):
