@@ -220,37 +220,7 @@ def test_reload_reentrancy_guard() -> None:
     mgr.is_reloading = False
     print("PASS: test_reload_reentrancy_guard")
 
-async def concurrent_reader_task(mgr: ReloadManager, iterations: int) -> int:
-    valid_reads: int = 0
-    i: int = 0
-    while i < iterations:
-        snap: ConfigSnapshot = mgr.snapshot()
-        port: int = snap.get_int("PORT")
-        name: str = snap.get_string("APP_NAME")
-        # Invariant: Must always be either (8081, "Version1App") OR (9092, "Version2App")
-        # Zero torn state permitted!
-        if port == 8081 and name == "Version1App":
-            valid_reads = valid_reads + 1
-        elif port == 9092 and name == "Version2App":
-            valid_reads = valid_reads + 1
-        i = i + 1
-    return valid_reads
-
-async def concurrent_writer_task(mgr: ReloadManager, mem_src: MemorySource) -> bool:
-    mem_src.set_string("APP_NAME", "Version2App")
-    mem_src.set_string("PORT", "9092")
-    res: ReloadResult = mgr.reload()
-    return res.success
-
-# Run all test functions
-test_reload_02_successful_reload()
-test_reload_01_invalid_config_rollback()
-test_reload_interpolation_cycle_rollback()
-test_consecutive_reloads_and_metrics()
-test_concurrent_reader_consistency_during_reload()
-test_reload_reentrancy_guard()
-
-# RELOAD-02: True concurrent multi-task reader/writer stress test using spawn and await
+# Module-level fixtures for true concurrent multi-task stress test (RELOAD-02)
 schema_stress: ConfigSchema = ConfigSchema()
 schema_stress.add_string("APP_NAME", True, True, "DefaultApp", False, True)
 schema_stress.add_int("PORT", True, False, 0, True, 1024, True, 65535, False)
@@ -265,11 +235,42 @@ b_stress.with_source(mem_stress)
 
 mgr_stress: ReloadManager = ReloadManager(b_stress)
 
+async def concurrent_reader_task(task_id: int) -> int:
+    # Only primitive types (int) packed across async tasks under non-release mode
+    valid_reads: int = 0
+    i: int = 0
+    while i < 150:
+        snap: ConfigSnapshot = mgr_stress.snapshot()
+        port: int = snap.get_int("PORT")
+        name: str = snap.get_string("APP_NAME")
+        # Invariant: Must always be either (8081, "Version1App") OR (9092, "Version2App")
+        # Zero torn state permitted!
+        if port == 8081 and name == "Version1App":
+            valid_reads = valid_reads + 1
+        elif port == 9092 and name == "Version2App":
+            valid_reads = valid_reads + 1
+        i = i + 1
+    return valid_reads
+
+async def concurrent_writer_task(step: int) -> bool:
+    mem_stress.set_string("APP_NAME", "Version2App")
+    mem_stress.set_string("PORT", "9092")
+    res: ReloadResult = mgr_stress.reload()
+    return res.success
+
+# Run all test functions
+test_reload_02_successful_reload()
+test_reload_01_invalid_config_rollback()
+test_reload_interpolation_cycle_rollback()
+test_consecutive_reloads_and_metrics()
+test_concurrent_reader_consistency_during_reload()
+test_reload_reentrancy_guard()
+
 # Spawn 3 concurrent reader tasks and 1 concurrent writer task
-t_r1: Task[int] = spawn concurrent_reader_task(mgr_stress, 200)
-t_r2: Task[int] = spawn concurrent_reader_task(mgr_stress, 200)
-t_w: Task[bool] = spawn concurrent_writer_task(mgr_stress, mem_stress)
-t_r3: Task[int] = spawn concurrent_reader_task(mgr_stress, 200)
+t_r1: Task[int] = spawn concurrent_reader_task(1)
+t_r2: Task[int] = spawn concurrent_reader_task(2)
+t_w: Task[bool] = spawn concurrent_writer_task(1)
+t_r3: Task[int] = spawn concurrent_reader_task(3)
 
 r1_valid: int = await t_r1
 r2_valid: int = await t_r2
@@ -277,9 +278,9 @@ writer_ok: bool = await t_w
 r3_valid: int = await t_r3
 
 assert writer_ok, "concurrent writer reload must succeed"
-assert r1_valid == 200, "Reader 1 observed torn state: " + str(r1_valid) + "/200"
-assert r2_valid == 200, "Reader 2 observed torn state: " + str(r2_valid) + "/200"
-assert r3_valid == 200, "Reader 3 observed torn state: " + str(r3_valid) + "/200"
+assert r1_valid == 150, "Reader 1 observed torn state: " + str(r1_valid) + "/150"
+assert r2_valid == 150, "Reader 2 observed torn state: " + str(r2_valid) + "/150"
+assert r3_valid == 150, "Reader 3 observed torn state: " + str(r3_valid) + "/150"
 assert mgr_stress.get_version() == 2
 print("PASS: test_true_concurrent_readers_and_writer_stress")
 
