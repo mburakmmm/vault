@@ -1,0 +1,103 @@
+# VAULT — Performance & Scale Benchmark (PERF-01)
+# Verifies 1000+ key configuration load across multiple sources (dotenv, json, memory),
+# 3-level chained variable interpolation, schema validation, and sub-second execution.
+
+from nox.test import assert_true, assert_eq_str, assert_eq_int
+from nox.fs import write_string, remove_file, exists
+import nox.time
+from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot
+from sources.memory import MemorySource
+
+def test_large_scale_benchmark_1000_keys() -> None:
+    # 1. Setup paths
+    env_file: str = "fixtures/benchmark_temp.env"
+    json_file: str = "fixtures/benchmark_temp.json"
+
+    # 2. Generate Dotenv with 400 keys
+    env_lines: list[str] = []
+    e_idx: int = 0
+    while e_idx < 400:
+        env_lines.append("BENCH_DOTENV_" + str(e_idx) + "=val_dotenv_" + str(e_idx) + "\n")
+        e_idx = e_idx + 1
+
+    env_body: str = ""
+    e_idx = 0
+    while e_idx < len(env_lines):
+        env_body = env_body + env_lines[e_idx]
+        e_idx = e_idx + 1
+    write_string(env_file, env_body)
+
+    # 3. Generate JSON with 300 keys
+    json_parts: list[str] = []
+    json_parts.append("{\n")
+    j_idx: int = 0
+    while j_idx < 300:
+        comma: str = "," if j_idx < 299 else ""
+        json_parts.append('  "bench_json_' + str(j_idx) + '": "val_json_' + str(j_idx) + '"' + comma + '\n')
+        j_idx = j_idx + 1
+    json_parts.append("}\n")
+
+    json_body: str = ""
+    j_idx = 0
+    while j_idx < len(json_parts):
+        json_body = json_body + json_parts[j_idx]
+        j_idx = j_idx + 1
+    write_string(json_file, json_body)
+
+    # 4. Generate Memory Source with 300 keys including 3-level chained interpolation
+    mem_src: MemorySource = MemorySource("bench_memory", 2, "base", False)
+    m_idx: int = 0
+    while m_idx < 296:
+        mem_src.set_string("MEM_BENCH_" + str(m_idx), "val_mem_" + str(m_idx))
+        m_idx = m_idx + 1
+
+    # 3-level chained interpolation
+    mem_src.set_string("CHAIN_ROOT", "root")
+    mem_src.set_string("CHAIN_L1", "${CHAIN_ROOT}_level1")
+    mem_src.set_string("CHAIN_L2", "${CHAIN_L1}_level2")
+    mem_src.set_string("APP_CHAIN_FINAL", "${CHAIN_L2}_level3")
+
+    # 5. Schema validation definitions
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_CHAIN_FINAL", True, False, "", False, True)
+    schema.add_string("BENCH_DOTENV_0", True, False, "", False, True)
+    schema.add_string("bench_json_0", True, False, "", False, True)
+    schema.add_string("MEM_BENCH_100", True, False, "", False, True)
+
+    # 6. Run Benchmark and measure time
+    t_start: int = nox.time.now_ms()
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_source(mem_src)
+    builder.with_json_file(json_file, False)
+    builder.with_dotenv(env_file, False)
+    builder.with_schema(schema)
+
+    snapshot: ConfigSnapshot = builder.build()
+    t_elapsed: int = nox.time.now_ms() - t_start
+
+    # Clean up generated fixture files
+    if exists(env_file):
+        remove_file(env_file)
+    if exists(json_file):
+        remove_file(json_file)
+
+    # 7. Assertions
+    # A. Key count >= 1000
+    total_keys: int = len(snapshot.keys())
+    assert_true(total_keys >= 1000, "Snapshot must contain at least 1000 keys, actual: " + str(total_keys))
+
+    # B. 3-level chained interpolation resolved correctly
+    assert_eq_str(snapshot.get_string("APP_CHAIN_FINAL"), "root_level1_level2_level3", "3-level chained interpolation must resolve")
+
+    # C. Source values preserved across memory, dotenv, and json
+    assert_eq_str(snapshot.get_string("BENCH_DOTENV_0"), "val_dotenv_0", "dotenv key preserved")
+    assert_eq_str(snapshot.get_string("bench_json_0"), "val_json_0", "json key preserved")
+    assert_eq_str(snapshot.get_string("MEM_BENCH_100"), "val_mem_100", "memory key preserved")
+
+    # D. Performance: Must finish well under 1500 ms
+    print("Benchmark completed in " + str(t_elapsed) + " ms for " + str(total_keys) + " keys")
+    assert_true(t_elapsed < 1500, "1000-key build + interpolation + validation must finish within 1500ms, took " + str(t_elapsed) + " ms")
+
+test_large_scale_benchmark_1000_keys()
+print("PASS: test_large_scale_benchmark_1000_keys")

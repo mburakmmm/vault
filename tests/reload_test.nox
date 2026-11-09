@@ -157,9 +157,58 @@ def test_consecutive_reloads_and_metrics() -> None:
     assert manager.failed_reloads == 1
     print("PASS: test_consecutive_reloads_and_metrics")
 
+def test_concurrent_reader_consistency_during_reload() -> None:
+    # RELOAD-01: Readers holding references or querying snapshot during reload never see torn state
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, True, "DefaultApp", False, True)
+    schema.add_int("PORT", True, False, 0, True, 1024, True, 65535, False)
+
+    mem_src: MemorySource = MemorySource("concurrent_mem", 5, "base", False)
+    mem_src.set_string("APP_NAME", "Version1App")
+    mem_src.set_string("PORT", "8081")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(mem_src)
+
+    mgr: ReloadManager = ReloadManager(builder)
+
+    # Reader 1 acquires initial snapshot
+    snap_v1: ConfigSnapshot = mgr.snapshot()
+    assert snap_v1.get_string("APP_NAME") == "Version1App"
+    assert snap_v1.get_int("PORT") == 8081
+
+    # Writer performs invalid reload (violates min port constraint)
+    mem_src.set_string("PORT", "80") # Below min 1024
+    res_fail: ReloadResult = mgr.reload()
+    assert not res_fail.success
+    # Manager retains last known good
+    assert mgr.snapshot().get_int("PORT") == 8081
+    # Reader 1's reference is completely unaltered
+    assert snap_v1.get_int("PORT") == 8081
+
+    # Writer performs valid update to Version 2
+    mem_src.set_string("APP_NAME", "Version2App")
+    mem_src.set_string("PORT", "9092")
+    res_v2: ReloadResult = mgr.reload()
+    assert res_v2.success
+    assert mgr.get_version() == 2
+
+    # Reader 2 acquires new snapshot
+    snap_v2: ConfigSnapshot = mgr.snapshot()
+    assert snap_v2.get_string("APP_NAME") == "Version2App"
+    assert snap_v2.get_int("PORT") == 9092
+
+    # Reader 1 holding old reference still sees consistent Version 1 data (zero torn reads!)
+    assert snap_v1.get_string("APP_NAME") == "Version1App"
+    assert snap_v1.get_int("PORT") == 8081
+
+    print("PASS: test_concurrent_reader_consistency_during_reload")
+
 # Run all test functions
 test_reload_02_successful_reload()
 test_reload_01_invalid_config_rollback()
 test_reload_interpolation_cycle_rollback()
 test_consecutive_reloads_and_metrics()
+test_concurrent_reader_consistency_during_reload()
 print("ALL RELOAD TESTS PASSED SUCCESSFULLY!")

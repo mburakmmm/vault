@@ -74,4 +74,25 @@ except Exception:
 
 assert_true(dotenv_caught, "dotenv file escaping allowed root must be rejected with CONFIG_PATH_OUTSIDE_ROOT")
 
+# -------------------------------------------------------------------------
+# Test 5: Order-Independent with_allowed_root in ConfigBuilder (CONF-01)
+# -------------------------------------------------------------------------
+from core.builder import ConfigBuilder
+
+# Adding a file first, then calling with_allowed_root must still enforce confinement!
+builder_order: ConfigBuilder = ConfigBuilder()
+builder_order.with_json_file("fixtures/dotenv/valid.env", False) # outside allowed root fixtures/config
+builder_order.with_allowed_root("fixtures/config") # called AFTER adding source!
+
+order_caught: bool = False
+try:
+    builder_order.build()
+except ConfigError as err:
+    if err.code == ERR_CONFIG_PATH_OUTSIDE_ROOT:
+        order_caught = True
+except Exception:
+    pass
+
+assert_true(order_caught, "calling with_allowed_root after source addition must still enforce confinement")
+
 print("SECURITY_TEST: ALL PASS")

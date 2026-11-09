@@ -32,7 +32,7 @@ from providers.remote_http import RemoteHttpSecretProvider, HttpTransport, Stand
 from reload.manager import ReloadManager, ReloadResult
 from cli.main import run_cli, parse_cli_args, CliOptions
 
-VERSION: str = "1.0.1"
+VERSION: str = "1.0.2"
 
 def version() -> str:
     return VERSION

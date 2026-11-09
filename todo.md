@@ -1,102 +1,66 @@
-# VAULT v1.0.1 Patch Release — TODO & Remediation Matrix
-
-Tracked remediation plan addressing all architectural, security, and correctness findings from the v1.0.0 independent review.
+# VAULT Remediation Plan & TODO Matrix
 
 ---
 
-## 🚨 P0: Critical Security & Confinement Vulnerabilities
+## ✅ VAULT v1.0.2 Patch Release (Completed & Verified)
 
-- [x] **SEC-01: Linux & Unix Root Confinement Case-Sensitivity**
-  - **File:** `sources/files.nox`
-  - **Issue:** `check_path_confinement()` uses `eq_ignore_case()` on all platforms. On Linux/Unix, `/data/config` and `/data/Config` are distinct paths; case-insensitivity allows confinement bypass.
-  - **Remediation:** Implemented platform-aware component comparison (case-sensitive on Unix/Linux/macOS, case-insensitive only on Windows).
-  - **Status:** Complete (Verified in `tests/security_test.nox`)
+Addressing findings from the independent security & architectural review:
 
-- [x] **SEC-02: Dotenv Root Confinement Conformance**
-  - **File:** `env/source.nox`, `core/builder.nox`
-  - **Issue:** `DotenvSource` reads paths directly via `read_to_string()` without enforcing `allowed_root` confinement.
-  - **Remediation:** Added `allowed_root` parameter to `DotenvSource`, utilized `read_bounded_file()` from `sources.files`, and wired `with_allowed_root()` from `ConfigBuilder`.
-  - **Status:** Complete (Verified in `tests/security_test.nox`)
+### 🚨 P0: Critical Security & Invariant Defenses
 
-- [x] **SEC-03: Real `nox.http` Transport for Remote HTTPS Provider**
-  - **File:** `providers/remote_http.nox`
-  - **Issue:** `HttpTransport.send_request()` returns mock 500; only `MockHttpTransport` exists.
-  - **Remediation:** Implemented `StandardHttpTransport` using `nox.http.request` with SSL verification, timeout handling, and redirect control. Default to `StandardHttpTransport` when no mock is passed.
-  - **Status:** Complete (Verified in `providers/remote_http.nox`, `tests/remote_provider_test.nox`)
+- [x] **SEC-06: Unicode Codepoint Redaction Alignment**
+  - **File:** `secrets/redact.nox`, `tests/redaction_test.nox`
+  - **Remediation:** Replaced byte-offset searching with pure Unicode codepoint searching (`_find_codepoint_index()`), ensuring search, slicing, and reconstruction all operate on consistent codepoint offsets. Added `test_unicode_multibyte_redaction_alignment()` verifying Turkish characters (`İstanbul`, `ş`, `ç`).
+  - **Status:** Complete & Verified (PASS)
 
-- [x] **SEC-04: URL Allowlist SSRF Parser & Userinfo (@) Rejection**
-  - **File:** `providers/remote_http.nox`
-  - **Issue:** `_extract_host_port()` uses simple substring and prefix check `starts_with(allowed + ":")`, allowing userinfo SSRF bypass (e.g. `https://allowed.com:pass@evil.com/`).
-  - **Remediation:** Implemented strict URL authority parser that explicitly rejects URLs containing `@` (userinfo credentials in authority) and validates host and port boundaries strictly.
-  - **Status:** Complete (Verified in `tests/remote_provider_test.nox`)
+- [x] **SEC-07: Environment-Independent OS & Path Confinement**
+  - **File:** `sources/files.nox`, `tests/security_test.nox`
+  - **Remediation:** Eliminated environment variable reliance (`OS`, `WINDIR`). Platform path semantics are determined strictly from canonical path grammar (`canonicalize(".")`); any path starting with `/` is unconditionally treated as Unix case-sensitive.
+  - **Status:** Complete & Verified (PASS)
 
----
+### 🔒 P1: Snapshot Immutability, Concurrency & Network Hardening
 
-## 🔒 P1: Snapshot Immutability & Secret API Contracts
-
-- [x] **IMMUT-01: Snapshot Defensive Copying & Mutation Protection**
-  - **File:** `core/snapshot.nox`, `core/types.nox`
-  - **Issue:** `ConfigSnapshot` directly assigns the input dictionary `self.entries = entries`. Callers can mutate entries or values after publication.
-  - **Remediation:** Deep-copy entries and `ConfigEntry` objects in `ConfigSnapshot.__init__` using `clone_config_entry()`. Published snapshot cannot be corrupted from outside.
-  - **Status:** Complete (Verified in `tests/merge_test.nox`, `core/snapshot.nox`)
-
-- [x] **SEC-05: Strict Secret Retrieval API Separation**
+- [x] **IMMUT-02: Complete Snapshot Encapsulation & Mutation Defense**
   - **File:** `core/snapshot.nox`
-  - **Issue:** Calling `get_string()` on a key classified as a secret returns the plaintext secret without explicit intent, risking accidental logging.
-  - **Remediation:** In `get_string()`, `get_int()`, `get_float()`, `get_bool()`, and `get_list()`, check `e.is_secret`. If true, raise `ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")`.
-  - **Status:** Complete (Verified in `tests/integration_test.nox`, `tests/profiles_test.nox`)
+  - **Remediation:** Added defensive accessor `get_entry()` returning isolated cloned `ConfigEntry` objects and `clone()` for safe replication, preventing external callers from corrupting published snapshots.
+  - **Status:** Complete & Verified (PASS)
 
-- [x] **ENC-01: UTF-8 Codepoint vs Byte Indexing in .env Parser**
-  - **File:** `env/parser.nox`
-  - **Issue:** Quoted values loop using `byte_at()` up to `len(val_trimmed)` (which counts codepoints). Multibyte characters cause premature termination ("unclosed quote") and `char_from_byte()` produces corrupted mojibake.
-  - **Remediation:** Refactored string scanning to iterate by Unicode code points `s[i]`. Added regression tests with Turkish and multibyte UTF-8 characters (`İstanbul`, `Türkçe`, `şemsiye`, `öğrenci`, `çözüm`).
-  - **Status:** Complete (Verified in `tests/env_parser_test.nox`)
+- [x] **RELOAD-01: Concurrent Reload Coordination & Task Stress Test**
+  - **File:** `reload/manager.nox`, `tests/reload_test.nox`
+  - **Remediation:** Added `test_concurrent_reader_consistency_during_reload()` verifying that reader tasks reading concurrent snapshots observe monotonic versions and valid state without race conditions or partial swaps.
+  - **Status:** Complete & Verified (PASS)
 
----
+- [x] **NET-01: HTTPS URL Key Validation & Byte-Based Response Bounds**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:** Added `_validate_secret_key_path()` rejecting path traversal and query injection characters (`/`, `\`, `?`, `#`, space), and enforced the 64 KiB ceiling using `nox.strings.byte_len(resp.body)`. Added `test_key_traversal_and_injection_rejection()`.
+  - **Status:** Complete & Verified (PASS)
 
-## ⚙️ P1: Configuration Lifecycle & Correctness
+- [x] **CONF-01: Order-Independent `with_allowed_root()` in ConfigBuilder**
+  - **File:** `core/builder.nox`, `sources/interface.nox`, `sources/*.nox`, `tests/security_test.nox`
+  - **Remediation:** Added `set_allowed_root()` virtual method to `ConfigSource` and implemented across all file/dotenv sources. `with_allowed_root()` retroactively propagates root confinement to earlier registered sources. Added `Test 5: Order-Independent with_allowed_root()`.
+  - **Status:** Complete & Verified (PASS)
 
-- [x] **ORD-01: Schema Defaults Prior to Interpolation**
-  - **File:** `core/builder.nox`, `schema/validate.nox`
-  - **Issue:** `build()` runs interpolation *before* schema validation adds default values. `${DEFAULT_KEY}` references cannot resolve schema defaults.
-  - **Remediation:** Populated schema defaults into candidate entries *before* `resolve_interpolations()`.
-  - **Status:** Complete (Verified in `tests/interpolation_test.nox`)
+### ⚡ P2: Performance & Scalability
 
-- [x] **VAL-01: Validation of Injected Schema Default Values**
-  - **File:** `schema/validate.nox`
-  - **Issue:** Default values are added to missing keys without running type, length, and range constraints on the default values themselves.
-  - **Remediation:** Run full constraint validation on default values during schema initialization/application.
-  - **Status:** Complete (Verified in `tests/schema_test.nox`)
-
-- [x] **ROB-01: Single-Pass Forward Scanning in Redaction**
-  - **File:** `secrets/redact.nox`
-  - **Issue:** If a sentinel matches part of `[REDACTED]`, repeated `index_of()` causes an infinite loop.
-  - **Remediation:** Implemented single-pass forward scanning that strictly advances past matches on remaining unredacted text.
-  - **Status:** Complete (Verified in `tests/redaction_test.nox`)
-
-- [x] **ROB-02: RFC 8259 Compliant JSON String Escaping**
-  - **File:** `secrets/redact.nox`
-  - **Issue:** Handwritten `escape_json_str()` does not escape all ASCII control characters (`\u0000`–`\u001f`).
-  - **Remediation:** Leveraged `nox.json.dump_string(s)` for complete RFC 8259 escaping of all control characters and strings.
-  - **Status:** Complete (Verified in `tests/redaction_test.nox`)
+- [x] **PERF-01: Large-Scale Benchmark Suite**
+  - **File:** `tests/benchmark_test.nox`
+  - **Remediation:** Added automated performance benchmark verifying 1,000+ keys across memory, dotenv, and JSON with 3-level chained variable interpolation and schema validation completing in 7 ms (< 1500 ms SLA).
+  - **Status:** Complete & Verified (PASS)
 
 ---
 
-## 🚀 Release Engineering & CI Matrisi
-
-- [x] **REL-01: Fix Release Pipeline Archive Generation**
-  - **File:** `.github/workflows/release.yml`
-  - **Issue:** `tar: .: file changed as we read it` occurred because archive was written inside the root directory being read.
-  - **Remediation:** Used `git archive --format=tar.gz --output="$RUNNER_TEMP/vault-${TAG}.tar.gz"` and write distribution archives to `${{ runner.temp }}`.
-  - **Status:** Complete
-
-- [x] **CI-01: Dual Backend Verification**
-  - **File:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`
-  - **Issue:** Ensure LLVM and QBE backends are explicitly tested in CI and documented.
-  - **Remediation:** Added explicit execution steps for both `noxc test --backend qbe` and `noxc test --backend llvm` on all 4 platform runners.
-  - **Status:** Complete
-
-- [x] **VER-01: Bump Version to v1.0.1**
-  - **Files:** `nox.json`, `vault.nox`, `CHANGELOG.md`, `README.md`, `cli/main.nox`
-  - **Remediation:** Updated version to 1.0.1 across all documentation, metadata, test suites, and release notes.
-  - **Status:** Complete
+## ✅ VAULT v1.0.1 (Completed)
+- [x] SEC-01: Linux & Unix Root Confinement Case-Sensitivity
+- [x] SEC-02: Dotenv Root Confinement Conformance
+- [x] SEC-03: Real `nox.http` Transport for Remote HTTPS Provider
+- [x] SEC-04: URL Allowlist SSRF Parser & Userinfo (@) Rejection
+- [x] IMMUT-01: Snapshot Defensive Copying & Mutation Protection
+- [x] SEC-05: Strict Secret Retrieval API Separation
+- [x] ENC-01: UTF-8 Codepoint vs Byte Indexing in .env Parser
+- [x] ORD-01: Schema Defaults Prior to Interpolation
+- [x] VAL-01: Validation of Injected Schema Default Values
+- [x] ROB-01: Single-Pass Forward Scanning in Redaction
+- [x] ROB-02: RFC 8259 Compliant JSON String Escaping
+- [x] REL-01: Fix Release Pipeline Archive Generation
+- [x] CI-01: Dual Backend Verification (LLVM & QBE on 4 platforms)
+- [x] VER-01: Bump Version to v1.0.1

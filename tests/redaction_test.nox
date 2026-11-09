@@ -150,6 +150,22 @@ def test_sentinel_matching_redacted_label() -> None:
     assert "Hostile message" in redacted
     print("PASS: test_sentinel_matching_redacted_label")
 
+def test_unicode_multibyte_redaction_alignment() -> None:
+    # SEC-06: Multibyte characters preceding a secret must not cause byte-offset slice misalignment!
+    sentinels: list[str] = ["TOP_SECRET_KEY", "DATABASE_PASSWORD"]
+    # 'ş' is 2 bytes in UTF-8; previously index_of returned byte offset 2 while slicing took 2 codepoints ('şT')
+    text1: str = "şTOP_SECRET_KEY"
+    redacted1: str = redact_string(text1, sentinels)
+    assert redacted1 == "ş[REDACTED]"
+    assert "TOP_SECRET_KEY" not in redacted1
+
+    # Complex Turkish text with accented characters before and after
+    text2: str = "İstanbul-Şehir-DATABASE_PASSWORD-Türkiye-Öğrenci"
+    redacted2: str = redact_string(text2, sentinels)
+    assert redacted2 == "İstanbul-Şehir-[REDACTED]-Türkiye-Öğrenci"
+    assert "DATABASE_PASSWORD" not in redacted2
+    print("PASS: test_unicode_multibyte_redaction_alignment")
+
 # Run all test functions
 test_secret_01_text_redaction()
 test_secret_02_redacted_json_and_explain()
@@ -157,4 +173,5 @@ test_secret_03_explicit_retrieval()
 test_taint_propagation_redaction()
 test_secret_cache_ttl()
 test_sentinel_matching_redacted_label()
+test_unicode_multibyte_redaction_alignment()
 print("ALL REDACTION TESTS PASSED SUCCESSFULLY!")

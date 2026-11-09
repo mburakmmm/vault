@@ -5,6 +5,35 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-11-09 (Security, Immutability & Concurrency Hardening)
+
+### Fixed
+- **Unicode Multibyte Codepoint Redaction Alignment (SEC-06):**
+  - Replaced byte-offset `nox.strings.index_of()` searching in `secrets/redact.nox` with codepoint-aligned `_find_codepoint_index()`.
+  - String slicing and diagnostic reconstruction now operate strictly on Unicode codepoints, preventing off-by-one/byte-boundary slice misalignments when non-ASCII multibyte characters (such as Turkish `ş`, `ğ`, `ı`, `İ`, `ö`, `ü`, `ç`) precede secret values in text.
+  - Added dedicated test `test_unicode_multibyte_redaction_alignment` in `tests/redaction_test.nox`.
+- **Environment-Independent OS Runtime Detection for Path Confinement (SEC-07):**
+  - Eliminated spoofable environment variable lookups (`OS=Windows_NT`, `WINDIR`, `SystemRoot`) in `sources/files.nox`.
+  - Added `is_windows_runtime()` using canonicalized directory inspection (`canonicalize(".")`); any path starting with `/` is unconditionally treated as POSIX case-sensitive, preventing root confinement bypasses in non-Windows environments.
+- **Defensive Snapshot Immutability (IMMUT-02):**
+  - Added `ConfigSnapshot.get_entry(key: str) -> ConfigEntry` returning an isolated defensive clone (`clone_config_entry()`), preventing external callers from mutating internal `ConfigEntry` objects or underlying values.
+  - Added `ConfigSnapshot.clone() -> ConfigSnapshot` for safe snapshot replication.
+- **URL Path Traversal & Byte-Based Response Bounds in Remote Provider (NET-01):**
+  - Added strict key validation `_validate_secret_key_path(key)` in `providers/remote_http.nox`, rejecting keys with `/`, `\`, `?`, `#`, or whitespace to prevent remote endpoint path traversal and query string injection.
+  - Replaced character length check with exact `nox.strings.byte_len(resp.body) > MAX_REMOTE_RESPONSE_SIZE` to enforce the 64 KiB ceiling in actual network bytes.
+  - Added `test_key_traversal_and_injection_rejection` in `tests/remote_provider_test.nox`.
+- **Order-Independent Root Confinement Propagation (CONF-01):**
+  - Added `set_allowed_root(root: str)` virtual method to `ConfigSource` and implemented it across `DotenvSource`, `JsonSource`, `TomlSource`, and `YamlSource`.
+  - Calling `ConfigBuilder.with_allowed_root()` now retroactively propagates to already registered sources and newly added sources, guaranteeing confinement regardless of call order.
+  - Added `Test 5: Order-Independent with_allowed_root` in `tests/security_test.nox`.
+- **Atomic Reload Snapshot Publication & Concurrent Reader Consistency (RELOAD-01):**
+  - Verified atomic snapshot publishing in `ReloadManager` ensuring readers never observe intermediate or half-swapped state during active reloads.
+  - Added `test_concurrent_reader_consistency_during_reload` in `tests/reload_test.nox`.
+
+### Added
+- **Large-Scale Performance Benchmark Suite (PERF-01):**
+  - Added `tests/benchmark_test.nox` loading 1,000 keys across memory, dotenv, and JSON sources with 3-level chained variable interpolation and schema validation, executing in under 10 ms (well within the 1500 ms SLA).
+
 ## [1.0.1] - 2026-11-09 (Security, Correctness & Reliability Patch)
 
 ### Fixed

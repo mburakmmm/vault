@@ -142,6 +142,16 @@ def validate_https_endpoint(url: str, allowlist: list[str]) -> bool:
 
     return matched
 
+def _validate_secret_key_path(key: str) -> None:
+    if len(key) == 0:
+        raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "empty secret key not permitted in remote endpoint")
+    if nox.strings.contains(key, "/") or nox.strings.contains(key, "\\"):
+        raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain path traversal or separator characters")
+    if nox.strings.contains(key, "?") or nox.strings.contains(key, "#"):
+        raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain query or fragment delimiters")
+    if nox.strings.contains(key, " ") or nox.strings.contains(key, "\t"):
+        raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain whitespace")
+
 class RemoteHttpSecretProvider(SecretProvider):
     base_url: str
     allowed_hosts: list[str]
@@ -171,6 +181,11 @@ class RemoteHttpSecretProvider(SecretProvider):
             raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, id, "endpoint is not an allowed HTTPS target or violates SSRF protection")
 
     def get(self: RemoteHttpSecretProvider, key: str) -> SecretFetchResult:
+        try:
+            _validate_secret_key_path(key)
+        except ConfigError as err:
+            return make_fetch_error(err.code, err.message, self.id)
+
         current_url: str = self.base_url + "/" + key
         headers: dict[str, str] = {}
         headers[self.auth_header_name] = self.auth_token
@@ -190,8 +205,8 @@ class RemoteHttpSecretProvider(SecretProvider):
                     current_url = redir_target
                     # Continue loop to follow approved redirect
                 elif resp.status_code == 200:
-                    # 2. Successful response: enforce response size ceiling (64 KiB)
-                    if len(resp.body) > MAX_REMOTE_RESPONSE_SIZE:
+                    # 2. Successful response: enforce response size ceiling (64 KiB in actual bytes)
+                    if nox.strings.byte_len(resp.body) > MAX_REMOTE_RESPONSE_SIZE:
                         return make_fetch_error(ERR_CONFIG_SIZE_LIMIT, "remote secret response exceeds 64 KiB ceiling", self.id)
                     clean_secret: str = nox.strings.trim(resp.body)
                     return make_fetch_success(clean_secret, key, self.id)

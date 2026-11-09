@@ -18,3 +18,7 @@ class ConfigSource:
     def load(self: ConfigSource) -> list[ConfigEntry]:
         empty_entries: list[ConfigEntry] = []
         return empty_entries
+
+    def set_allowed_root(self: ConfigSource, root: str) -> None:
+        # Default no-op for non-filesystem sources (memory, env, etc.)
+        pass

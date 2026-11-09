@@ -41,6 +41,15 @@ class ConfigSnapshot:
     def keys(self: ConfigSnapshot) -> list[str]:
         return self.entries.keys()
 
+    def get_entry(self: ConfigSnapshot, key: str) -> ConfigEntry:
+        # Returns a defensive clone of ConfigEntry to protect snapshot immutability (IMMUT-02)
+        if key not in self.entries:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
+        return clone_config_entry(self.entries[key])
+
+    def clone(self: ConfigSnapshot) -> ConfigSnapshot:
+        return ConfigSnapshot(self.entries, self.snapshot_version)
+
     def get_string(self: ConfigSnapshot, key: str) -> str:
         if key not in self.entries:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")

@@ -51,6 +51,9 @@ class JsonSource(ConfigSource):
         self.allowed_root = allowed_root
         self.optional = optional
 
+    def set_allowed_root(self: JsonSource, root: str) -> None:
+        self.allowed_root = root
+
     def load(self: JsonSource) -> list[ConfigEntry]:
         content: str = read_bounded_file(self.path, self.allowed_root, self.optional)
         entries: list[ConfigEntry] = []

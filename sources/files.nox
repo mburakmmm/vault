@@ -4,29 +4,20 @@
 from core.errors import ConfigError, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SIZE_LIMIT
 from nox.fs import exists, is_file, metadata, read_to_string, FileMetadata
 from nox.path import canonicalize, components, PathError
-from nox.os import getenv, OsError
 import nox.strings
 
 MAX_CONFIG_FILE_SIZE: int = 1048576 # 1 MiB limit
 
-def is_windows_os() -> bool:
+def is_windows_runtime() -> bool:
+    # Environment-independent platform check using canonical path structure (SEC-07)
+    # Never trusts spoofable environment variables (WINDIR, OS, etc.)
     try:
-        val_os: str = getenv("OS")
-        if nox.strings.eq_ignore_case(val_os, "Windows_NT"):
+        cwd: str = canonicalize(".")
+        if len(cwd) >= 2 and cwd[1] == ":":
             return True
-    except OsError:
-        pass
-    try:
-        val_windir: str = getenv("WINDIR")
-        if len(val_windir) > 0:
+        if nox.strings.starts_with(cwd, "\\\\") or nox.strings.starts_with(cwd, "//"):
             return True
-    except OsError:
-        pass
-    try:
-        val_sysroot: str = getenv("SystemRoot")
-        if len(val_sysroot) > 0:
-            return True
-    except OsError:
+    except Exception:
         pass
     return False
 
@@ -54,7 +45,10 @@ def check_path_confinement(target_path: str, allowed_root: str) -> str:
     if len(target_comps) < len(root_comps):
         raise ConfigError(ERR_CONFIG_PATH_OUTSIDE_ROOT, target_path, "path escapes allowed root (insufficient depth)")
 
-    is_win: bool = is_windows_os()
+    # POSIX / Unix path starting with '/' is ALWAYS case-sensitive, regardless of any host environment
+    is_unix_path: bool = nox.strings.starts_with(canon_root, "/")
+    is_win: bool = is_windows_runtime() and not is_unix_path
+
     idx: int = 0
     while idx < len(root_comps):
         r_part: str = root_comps[idx]
@@ -62,10 +56,10 @@ def check_path_confinement(target_path: str, allowed_root: str) -> str:
         
         match_component: bool = False
         if is_win:
-            # Case-insensitive component comparison for Windows
+            # Case-insensitive component comparison for verified Windows volume paths
             match_component = nox.strings.eq_ignore_case(r_part, t_part)
         else:
-            # Case-sensitive component comparison for Linux, macOS and Unix
+            # Strictly case-sensitive component comparison for Linux, macOS, and POSIX
             match_component = (r_part == t_part)
 
         if not match_component:

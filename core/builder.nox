@@ -39,6 +39,11 @@ class ConfigBuilder:
 
     def with_allowed_root(self: ConfigBuilder, root: str) -> ConfigBuilder:
         self.allowed_root = root
+        # Propagate allowed_root retroactively to any sources added prior to this call (CONF-01)
+        s_idx: int = 0
+        while s_idx < len(self.sources):
+            self.sources[s_idx].set_allowed_root(root)
+            s_idx = s_idx + 1
         return self
 
     def with_profile(self: ConfigBuilder, name: str) -> ConfigBuilder:
@@ -147,6 +152,13 @@ class ConfigBuilder:
         return self
 
     def build(self: ConfigBuilder) -> ConfigSnapshot:
+        # Step 0: Ensure all sources have the final allowed_root configuration (CONF-01)
+        if len(self.allowed_root) > 0:
+            root_idx: int = 0
+            while root_idx < len(self.sources):
+                self.sources[root_idx].set_allowed_root(self.allowed_root)
+                root_idx = root_idx + 1
+
         # Step 1: Merge sources deterministically
         merged: dict[str, ConfigEntry] = merge_sources(self.sources)
 
