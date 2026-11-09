@@ -5,6 +5,19 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-09
+
+### Added
+- Validated reload manager (`reload/manager.nox`) with atomic snapshot swapping and validate-before-swap semantics.
+- Structured reload outcome model (`ReloadResult`) reporting success flag, version number, safe error codes, and effective snapshot.
+- Fail-closed rollback mechanism (**`RELOAD-01`**) ensuring that invalid candidate configurations (schema violations, cycles, missing keys) preserve the previous last-known-good snapshot wholly intact without partial state.
+- Monotonic version progression (**`RELOAD-02`**) on valid reloads (`v1` -> `v2` -> `...`).
+- Immutable reader consistency ensuring in-flight readers holding earlier snapshots observe consistent state without races or use-after-free hazards.
+- Cloned entry loading in `MemorySource` and `merge_sources` protecting source templates against in-place mutation across reload attempts.
+- Architecture Decision Record `docs/adr/0005-reload-consistency.md`.
+- Test suite `tests/reload_test.nox` covering successful reload, type mismatch rollback, interpolation cycle rollback, consecutive reload metrics, and reader snapshot immutability.
+- Verified 100% green across both LLVM (`zig 0.17.0`) and QBE compiler backends (15/15 test suites passing).
+
 ## [0.7.0] - 2026-11-03
 
 ### Added

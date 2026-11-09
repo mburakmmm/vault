@@ -243,18 +243,18 @@
 
 ---
 
-### [ ] Sürüm v0.8.0 — Faz 8: Doğrulanmış Yeniden Yükleme (Atomic Reload) & Son Bilinen İyi Durum
+### [x] Sürüm v0.8.0 — Faz 8: Doğrulanmış Yeniden Yükleme (Atomic Reload) & Son Bilinen İyi Durum
 > **Hedef:** Çalışma anında konfigürasyon yenilenirken sistemin kesintiye uğramamasını ve hatalı konfigürasyonda eski duruma dönülmesini sağlamak.
 
-- [ ] **8.1 Reload Yöneticisi (`reload/manager.nox`)**
-  - [ ] Aday (candidate) snapshot oluşturma ve tam doğrulama adımı.
-  - [ ] Doğrulama başarısız olursa: Eski snapshot'ı aynen koru, hata raporu dön (`RELOAD-01`).
-  - [ ] Doğrulama başarılı olursa: Yeni versiyonlanmış snapshot'ı yayınla (`RELOAD-02`).
-  - [ ] Eşzamanlı okuyucular için tutarlılık ve yarım kalmış durum (partial state) engeli.
-- [ ] **8.2 Testler (`tests/reload_test.nox`)**
-  - [ ] Geçersiz güncelleme sonrası geri alma (rollback) testi.
-  - [ ] Başarılı versiyon artışı testi.
-  - [ ] **Kabul Kapısı (Gate 8):** Snapshot takası atomik olmalı, yarım kalmış veya geçersiz konfigürasyon asla yayınlanmamalıdır.
+- [x] **8.1 Reload Yöneticisi (`reload/manager.nox`)**
+  - [x] Aday (candidate) snapshot oluşturma ve tam doğrulama adımı.
+  - [x] Doğrulama başarısız olursa: Eski snapshot'ı aynen koru, hata raporu dön (`RELOAD-01`).
+  - [x] Doğrulama başarılı olursa: Yeni versiyonlanmış snapshot'ı yayınla (`RELOAD-02`).
+  - [x] Eşzamanlı okuyucular için tutarlılık ve yarım kalmış durum (partial state) engeli.
+- [x] **8.2 Testler (`tests/reload_test.nox`)**
+  - [x] Geçersiz güncelleme sonrası geri alma (rollback) testi.
+  - [x] Başarılı versiyon artışı testi.
+  - [x] **Kabul Kapısı (Gate 8):** Snapshot takası atomik olmalı, yarım kalmış veya geçersiz konfigürasyon asla yayınlanmamalıdır. (LLVM ve QBE onaylı)
 
 ---
 

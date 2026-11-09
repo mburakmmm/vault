@@ -83,9 +83,9 @@ def merge_sources(sources: list[ConfigSource]) -> dict[str, ConfigEntry]:
                     is_new_cont: bool = e.val.kind == VAL_OBJECT or e.val.kind == VAL_ARRAY
                     if is_old_cont != is_new_cont:
                         raise ConfigError(ERR_CONFIG_TYPE_MISMATCH, k, "conflicting types between container and scalar")
-                    merged[k] = e
+                    merged[k] = ConfigEntry(e.key, e.val, e.presence, e.origin, e.is_secret, e.is_default)
             else:
-                merged[k] = e
+                merged[k] = ConfigEntry(e.key, e.val, e.presence, e.origin, e.is_secret, e.is_default)
 
             e_idx = e_idx + 1
 

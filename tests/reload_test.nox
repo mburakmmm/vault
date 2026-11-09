@@ -1,0 +1,165 @@
+# VAULT — Configuration Reload Manager Test Suite
+# Tests: RELOAD-01, RELOAD-02, Validate-Before-Swap, Last-Known-Good Rollback, Reader Consistency
+
+from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
+from core.errors import ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_INTERPOLATION_CYCLE
+from schema.fields import ConfigSchema
+from sources.memory import MemorySource
+from reload.manager import ReloadManager, ReloadResult
+
+def test_reload_02_successful_reload() -> None:
+    # Set up schema and memory source
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, True, "ServiceA", False, True)
+    schema.add_int("PORT", True, False, 0, True, 1024, True, 65535, False)
+
+    mem_src: MemorySource = MemorySource("dynamic_mem", 5, "base", False)
+    mem_src.set_string("APP_NAME", "VaultService")
+    mem_src.set_string("PORT", "8080")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(mem_src)
+
+    manager: ReloadManager = ReloadManager(builder)
+
+    # Initial state
+    assert manager.get_version() == 1
+    assert manager.snapshot().get_string("APP_NAME") == "VaultService"
+    assert manager.snapshot().get_int("PORT") == 8080
+    assert manager.snapshot().version() == "v1"
+
+    # Retain a reference to the initial snapshot for reader consistency test
+    snap_v1: ConfigSnapshot = manager.snapshot()
+
+    # Modify source with valid updated settings
+    mem_src.set_string("PORT", "9000")
+    mem_src.set_string("APP_NAME", "VaultService-V2")
+
+    # Perform reload
+    res: ReloadResult = manager.reload()
+
+    # Verify reload succeeded (RELOAD-02)
+    assert res.success
+    assert res.version == 2
+    assert manager.get_version() == 2
+    assert manager.snapshot().get_int("PORT") == 9000
+    assert manager.snapshot().get_string("APP_NAME") == "VaultService-V2"
+    assert manager.snapshot().version() == "v2"
+
+    # Reader consistency: the earlier snapshot retained by callers continues reading v1 values
+    assert snap_v1.get_int("PORT") == 8080
+    assert snap_v1.get_string("APP_NAME") == "VaultService"
+    assert snap_v1.version() == "v1"
+    print("PASS: test_reload_02_successful_reload")
+
+def test_reload_01_invalid_config_rollback() -> None:
+    # Schema requiring PORT as integer
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, True, "ServiceA", False, True)
+    schema.add_int("PORT", True, False, 0, True, 1024, True, 65535, False)
+
+    mem_src: MemorySource = MemorySource("dynamic_mem", 5, "base", False)
+    mem_src.set_string("APP_NAME", "GoodApp")
+    mem_src.set_string("PORT", "8080")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(mem_src)
+
+    manager: ReloadManager = ReloadManager(builder)
+    assert manager.snapshot().get_int("PORT") == 8080
+    assert manager.get_version() == 1
+
+    # Modify source: Change APP_NAME (valid) but set PORT to invalid non-integer string (invalid)
+    mem_src.set_string("APP_NAME", "CorruptCandidate")
+    mem_src.set_string("PORT", "not_a_valid_number")
+
+    # Attempt reload
+    res: ReloadResult = manager.reload()
+
+    # Verify reload failed and reported error (RELOAD-01)
+    assert not res.success
+    assert res.error_code == ERR_CONFIG_TYPE_MISMATCH
+    assert res.version == 1
+
+    # Verify LAST-KNOWN-GOOD snapshot was preserved wholly intact:
+    # 1. Version did not advance
+    assert manager.get_version() == 1
+    # 2. PORT is still 8080
+    assert manager.snapshot().get_int("PORT") == 8080
+    # 3. APP_NAME was NOT partially updated to "CorruptCandidate"
+    assert manager.snapshot().get_string("APP_NAME") == "GoodApp"
+    assert manager.snapshot().version() == "v1"
+    print("PASS: test_reload_01_invalid_config_rollback")
+
+def test_reload_interpolation_cycle_rollback() -> None:
+    # Test that introducing an interpolation cycle during reload is safely rejected and rolled back
+    mem_src: MemorySource = MemorySource("interp_mem", 5, "base", False)
+    mem_src.set_string("HOST", "db.internal")
+    mem_src.set_string("DB_URL", "postgres://${HOST}:5432/db")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_source(mem_src)
+
+    manager: ReloadManager = ReloadManager(builder)
+    assert manager.snapshot().get_string("DB_URL") == "postgres://db.internal:5432/db"
+    assert manager.get_version() == 1
+
+    # Introduce a cyclic dependency: HOST references DB_URL
+    mem_src.set_string("HOST", "prefix-${DB_URL}")
+
+    res: ReloadResult = manager.reload()
+
+    assert not res.success
+    assert res.error_code == ERR_CONFIG_INTERPOLATION_CYCLE
+    assert manager.get_version() == 1
+    # Previous good snapshot intact
+    assert manager.snapshot().get_string("DB_URL") == "postgres://db.internal:5432/db"
+    print("PASS: test_reload_interpolation_cycle_rollback")
+
+def test_consecutive_reloads_and_metrics() -> None:
+    mem_src: MemorySource = MemorySource("metrics_mem", 5, "base", False)
+    mem_src.set_string("STATUS", "init")
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_source(mem_src)
+
+    manager: ReloadManager = ReloadManager(builder)
+    assert manager.version == 1
+    assert manager.reload_count == 0
+    assert manager.failed_reloads == 0
+
+    # Reload 1: Valid
+    mem_src.set_string("STATUS", "step1")
+    res1: ReloadResult = manager.reload()
+    assert res1.success
+    assert manager.version == 2
+    assert manager.snapshot().get_string("STATUS") == "step1"
+
+    # Reload 2: Invalid (cycle)
+    mem_src.set_string("STATUS", "${STATUS}")
+    res2: ReloadResult = manager.reload()
+    assert not res2.success
+    assert manager.version == 2
+    assert manager.snapshot().get_string("STATUS") == "step1"
+
+    # Reload 3: Valid again
+    mem_src.set_string("STATUS", "step3")
+    res3: ReloadResult = manager.reload()
+    assert res3.success
+    assert manager.version == 3
+    assert manager.snapshot().get_string("STATUS") == "step3"
+
+    # Verify metrics
+    assert manager.reload_count == 3
+    assert manager.failed_reloads == 1
+    print("PASS: test_consecutive_reloads_and_metrics")
+
+# Run all test functions
+test_reload_02_successful_reload()
+test_reload_01_invalid_config_rollback()
+test_reload_interpolation_cycle_rollback()
+test_consecutive_reloads_and_metrics()
+print("ALL RELOAD TESTS PASSED SUCCESSFULLY!")
