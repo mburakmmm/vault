@@ -58,8 +58,7 @@ class ConfigBuilder:
             if not found:
                 raise ConfigError(ERR_CONFIG_PARSE_ERROR, cleaned, "unknown profile: '" + cleaned + "' is not recognized")
         self.profile = cleaned
-        if is_production_profile(cleaned):
-            self.is_production = True
+        self.is_production = is_production_profile(cleaned)
         return self
 
     def allow_profile(self: ConfigBuilder, name: str) -> ConfigBuilder:

@@ -2,6 +2,48 @@
 
 ---
 
+## ✅ VAULT v1.0.3 Patch Release (Completed & Verified)
+
+Addressing findings from the v1.0.2 technical review:
+
+### 🚨 P0: Snapshot Encapsulation & Secret Gate Invariants
+
+- [x] **IMMUT-03: Strict Secret Gate on `get_entry()` & Snapshot Encapsulation**
+  - **File:** `core/snapshot.nox`, `tests/redaction_test.nox`
+  - **Remediation:** `get_entry()` fails closed (`ERR_CONFIG_SECRET_SOURCE_DENIED`) on secret keys. Added `get_secret_entry()` for authorized access and `get_metadata()` for safe non-sensitive metadata inspection with `.val = make_string("[REDACTED]")`.
+  - **Status:** Complete & Verified (PASS)
+
+### 🔒 P1: True Concurrency & Comprehensive SSRF Hardening
+
+- [x] **RELOAD-02: True Concurrent Multi-Task Reload Stress Test & Reentrancy Guard**
+  - **File:** `reload/manager.nox`, `tests/reload_test.nox`
+  - **Remediation:** Added `is_reloading` reentrancy guard in `ReloadManager.reload()`. Added `test_true_concurrent_readers_and_writer_stress` running 3 concurrent reader tasks across 600 continuous reads concurrently with an active writer reload using native `spawn` and `await`, proving zero torn reads or intermediate states.
+  - **Status:** Complete & Verified (PASS)
+
+- [x] **NET-02: Comprehensive SSRF & Host Validation Hardening**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:** Hardened `validate_https_endpoint()` to reject IPv6 loopback (`[::1]`), non-standard IPv4 loopback (`127.*`), localhost domains (`*.localhost`), IPv6 link-local (`[fe80:*`), RFC 1918 private IPv4 networks (`10.*`, `192.168.*`, `172.16-31.*`), and URL-encoded authority. Hardened `_validate_secret_key_path()` to reject `%`, `..`, and `\0`.
+  - **Status:** Complete & Verified (PASS)
+
+### ⚙️ P2: Profile Switching & 1,000-Field Schema Benchmark
+
+- [x] **CONF-02: Dynamic Profile Switching State Consistency**
+  - **File:** `core/builder.nox`, `tests/profiles_test.nox`
+  - **Remediation:** Assigned `self.is_production = is_production_profile(cleaned)` in `with_profile()`. Added `test_dynamic_profile_switching_state_consistency`.
+  - **Status:** Complete & Verified (PASS)
+
+- [x] **TEST-01: 1,000-Field Comprehensive Schema Benchmark**
+  - **File:** `tests/benchmark_test.nox`
+  - **Remediation:** Added `test_large_scale_schema_benchmark_1000_fields()` validating 1,000 typed schema fields with range, length, and required constraints in 1 ms (< 1500 ms SLA).
+  - **Status:** Complete & Verified (PASS)
+
+- [x] **DOCS-01: Readme & Test Count Accuracy**
+  - **File:** `README.md`
+  - **Remediation:** Updated README to accurately state 20 test suites and documented `tests/benchmark_test.nox` in the coverage table.
+  - **Status:** Complete & Verified (PASS)
+
+---
+
 ## ✅ VAULT v1.0.2 Patch Release (Completed & Verified)
 
 Addressing findings from the independent security & architectural review:

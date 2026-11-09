@@ -101,3 +101,57 @@ def test_large_scale_benchmark_1000_keys() -> None:
 
 test_large_scale_benchmark_1000_keys()
 print("PASS: test_large_scale_benchmark_1000_keys")
+
+def test_large_scale_schema_benchmark_1000_fields() -> None:
+    # TEST-01: Benchmark validating 1,000 declared schema fields with constraints
+    schema: ConfigSchema = ConfigSchema()
+    mem_src: MemorySource = MemorySource("schema_bench_mem", 2, "base", False)
+
+    # 1. 500 string fields
+    s_idx: int = 0
+    while s_idx < 500:
+        k: str = "FIELD_STR_" + str(s_idx)
+        mem_src.set_string(k, "string_value_" + str(s_idx))
+        schema.add_string(k, True, False, "", False, True)
+        s_idx = s_idx + 1
+
+    # 2. 300 integer fields with range bounds (1 to 100000)
+    i_idx: int = 0
+    while i_idx < 300:
+        k_i: str = "FIELD_INT_" + str(i_idx)
+        val_i: int = i_idx + 10
+        mem_src.set_string(k_i, str(val_i))
+        schema.add_int(k_i, True, False, 0, True, 1, True, 100000, False)
+        i_idx = i_idx + 1
+
+    # 3. 200 boolean fields
+    b_idx: int = 0
+    while b_idx < 200:
+        k_b: str = "FIELD_BOOL_" + str(b_idx)
+        bool_str: str = "true" if b_idx % 2 == 0 else "false"
+        mem_src.set_string(k_b, bool_str)
+        schema.add_bool(k_b, True, False, False, False)
+        b_idx = b_idx + 1
+
+    # 4. Measure time taken for 1000-field schema validation
+    t_start: int = nox.time.now_ms()
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_source(mem_src)
+    builder.with_schema(schema)
+
+    snap: ConfigSnapshot = builder.build()
+    t_elapsed: int = nox.time.now_ms() - t_start
+
+    print("1,000-field Schema Benchmark completed in " + str(t_elapsed) + " ms")
+
+    # 5. Assertions
+    assert_true(len(snap.keys()) == 1000, "1000 keys must be present in snapshot")
+    assert_eq_str(snap.get_string("FIELD_STR_499"), "string_value_499", "string field validated")
+    assert_eq_int(snap.get_int("FIELD_INT_299"), 309, "int field coerced and range-validated")
+    assert_true(snap.get_bool("FIELD_BOOL_0"), "bool field coerced to true")
+    assert_true(not snap.get_bool("FIELD_BOOL_1"), "bool field coerced to false")
+    assert_true(t_elapsed < 1500, "1000-field schema validation must complete within 1500ms, took " + str(t_elapsed) + " ms")
+
+test_large_scale_schema_benchmark_1000_fields()
+print("PASS: test_large_scale_schema_benchmark_1000_fields")

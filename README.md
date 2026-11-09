@@ -6,7 +6,7 @@
 [![CI](https://github.com/mburakmmm/vault/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/vault/actions/workflows/ci.yml)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20ARM%20%7C%20Linux%20x64%20%7C%20Linux%20ARM%20%7C%20Windows%20x64-blue.svg?style=flat-square)](https://github.com/mburakmmm/vault/actions)
 [![NOX](https://img.shields.io/badge/NOX-v2.1.0-blue.svg?style=flat-square)](https://github.com/mburakmmm/nox-lang)
-[![Version: 1.0.2](https://img.shields.io/badge/Version-1.0.2-success.svg?style=flat-square)](CHANGELOG.md)
+[![Version: 1.0.3](https://img.shields.io/badge/Version-1.0.3-success.svg?style=flat-square)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Dual Backend](https://img.shields.io/badge/Backends-LLVM%20%7C%20QBE%20100%25%20Green-brightgreen.svg?style=flat-square)](tests/)
 [![Security: Fail--Closed](https://img.shields.io/badge/Security-Fail--Closed-red.svg?style=flat-square)](docs/security.md)
@@ -208,7 +208,7 @@ noxc test --backend llvm
 noxc test --backend qbe
 ```
 
-### Test Suite Coverage (19 Suites, 100% Passing)
+### Test Suite Coverage (20 Suites, 100% Passing)
 
 | Test Suite | Purpose | Backends |
 | :--- | :--- | :---: |
@@ -225,7 +225,8 @@ noxc test --backend qbe
 | `tests/redaction_test.nox` | Sentinel string scanning, JSON masking, TTL cache | LLVM & QBE |
 | `tests/secret_provider_test.nox`| Local providers (env, file, memory) & precedence rank 7 | LLVM & QBE |
 | `tests/remote_provider_test.nox`| Remote HTTPS provider, SSRF protection, redirect defense | LLVM & QBE |
-| `tests/reload_test.nox` | Validate-before-swap atomic reloads & rollback | LLVM & QBE |
+| `tests/reload_test.nox` | Validate-before-swap atomic reloads, rollback & concurrent tasks | LLVM & QBE |
+| `tests/benchmark_test.nox` | 1,000+ key load & 1,000-field schema validation benchmark | LLVM & QBE |
 | `tests/cli_test.nox` | CLI commands, exit codes, and safe help | LLVM & QBE |
 | `tests/adapters_test.nox` | Aether, Nyx, Feather, Noxen, Nova adapters | LLVM & QBE |
 | `tests/regression_matrix_test.nox`| Full AGENTS.md §19 end-to-end regression matrix | LLVM & QBE |

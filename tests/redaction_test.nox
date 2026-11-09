@@ -3,7 +3,8 @@
 
 from core.builder import ConfigBuilder
 from core.snapshot import ConfigSnapshot
-from core.errors import ConfigError, ERR_CONFIG_MISSING
+from core.types import ConfigEntry
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_SECRET_SOURCE_DENIED
 from schema.fields import ConfigSchema
 from secrets.mark import SecretValue, REDACTED_LABEL
 from secrets.redact import redact_string, to_redacted_json
@@ -92,9 +93,9 @@ def test_taint_propagation_redaction() -> None:
     snap: ConfigSnapshot = builder.build()
 
     # RAW_TOKEN is explicit secret
-    assert snap.entries["RAW_TOKEN"].is_secret
+    assert snap.is_secret("RAW_TOKEN")
     # AUTH_HEADER must be tainted secret
-    assert snap.entries["AUTH_HEADER"].is_secret
+    assert snap.is_secret("AUTH_HEADER")
 
     # Both must be [REDACTED] in redacted_json()
     json_out: str = snap.redacted_json()
@@ -166,6 +167,43 @@ def test_unicode_multibyte_redaction_alignment() -> None:
     assert "DATABASE_PASSWORD" not in redacted2
     print("PASS: test_unicode_multibyte_redaction_alignment")
 
+def test_snapshot_secret_entry_encapsulation() -> None:
+    # IMMUT-03: get_entry() must fail-closed on secret keys, preventing accidental secret leakage
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_override("APP_NAME", "VaultSafe")
+    builder.with_override("SECRET_TOKEN", "top_secret_value_xyz")
+
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, False, "", False, False)
+    schema.add_string("SECRET_TOKEN", True, False, "", True, False) # Secret!
+    builder.with_schema(schema)
+
+    snap: ConfigSnapshot = builder.build()
+
+    # 1. Non-secret entry can be retrieved via get_entry()
+    e_plain: ConfigEntry = snap.get_entry("APP_NAME")
+    assert e_plain.val.s == "VaultSafe"
+
+    # 2. Secret entry via get_entry() must fail-closed!
+    caught_secret: bool = False
+    try:
+        snap.get_entry("SECRET_TOKEN")
+    except ConfigError as err:
+        caught_secret = True
+        assert err.code == ERR_CONFIG_SECRET_SOURCE_DENIED
+    assert caught_secret, "get_entry() on secret key must raise ERR_CONFIG_SECRET_SOURCE_DENIED"
+
+    # 3. get_metadata() returns safe redacted value for secret entry
+    meta: ConfigEntry = snap.get_metadata("SECRET_TOKEN")
+    assert meta.is_secret
+    assert meta.val.s == "[REDACTED]"
+
+    # 4. get_secret_entry() allows intentional explicit retrieval
+    sec_entry: ConfigEntry = snap.get_secret_entry("SECRET_TOKEN")
+    assert sec_entry.is_secret
+    assert sec_entry.val.s == "top_secret_value_xyz"
+    print("PASS: test_snapshot_secret_entry_encapsulation")
+
 # Run all test functions
 test_secret_01_text_redaction()
 test_secret_02_redacted_json_and_explain()
@@ -174,4 +212,5 @@ test_taint_propagation_redaction()
 test_secret_cache_ttl()
 test_sentinel_matching_redacted_label()
 test_unicode_multibyte_redaction_alignment()
+test_snapshot_secret_entry_encapsulation()
 print("ALL REDACTION TESTS PASSED SUCCESSFULLY!")

@@ -18,11 +18,29 @@ def test_ssrf_and_scheme_validation() -> None:
     assert not validate_https_endpoint("ftp://vault.corp.internal/secret", allowlist)
 
     # 2. Reject cloud metadata and dangerous IP ranges (even if allowlisted)
-    dangerous_allowlist: list[str] = ["169.254.169.254", "0.0.0.0", "255.255.255.255"]
+    dangerous_allowlist: list[str] = [
+        "169.254.169.254", "0.0.0.0", "255.255.255.255",
+        "127.0.0.1", "127.0.0.2", "127.1.2.3", "localhost", "app.localhost",
+        "[::1]", "::1", "[0:0:0:0:0:0:0:1]", "[fe80::1]", "[::ffff:127.0.0.1]",
+        "10.0.0.1", "192.168.1.1", "172.16.0.1", "172.31.255.255"
+    ]
     assert not validate_https_endpoint("https://169.254.169.254/latest/meta-data", dangerous_allowlist)
     assert not validate_https_endpoint("https://169.254.1.1/secret", dangerous_allowlist)
     assert not validate_https_endpoint("https://0.0.0.0/secret", dangerous_allowlist)
     assert not validate_https_endpoint("https://255.255.255.255/secret", dangerous_allowlist)
+
+    # NET-02: Advanced SSRF rejection (IPv6, alternative loopbacks, link-local, RFC 1918)
+    assert not validate_https_endpoint("https://127.0.0.2/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://127.1.2.3/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://app.localhost/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://[::1]/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://[0:0:0:0:0:0:0:1]/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://[fe80::1]/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://[::ffff:127.0.0.1]/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://10.0.0.1/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://192.168.1.1/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://172.16.0.1/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://172.31.255.255/secret", dangerous_allowlist)
 
     # 3. Reject hosts not in allowlist
     assert not validate_https_endpoint("https://evil-attacker.com/secret", allowlist)
@@ -30,6 +48,8 @@ def test_ssrf_and_scheme_validation() -> None:
     # Userinfo (@) SSRF injection attempt rejection (SEC-04)
     assert not validate_https_endpoint("https://vault.corp.internal:secret@evil.com/v1/secrets", allowlist)
     assert not validate_https_endpoint("https://admin:pass@vault.corp.internal/v1/secrets", allowlist)
+    # URL-encoded authority rejection (NET-02)
+    assert not validate_https_endpoint("https://vault%2ecorp%2einternal/secret", allowlist)
 
     # 4. Accept valid allowlisted endpoints
     assert validate_https_endpoint("https://vault.corp.internal/v1/secrets", allowlist)
@@ -297,6 +317,16 @@ def test_key_traversal_and_injection_rejection() -> None:
     res4: SecretFetchResult = prov.get("secret key")
     assert not res4.found
     assert res4.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+
+    # NET-02: Key containing URL-encoded sequence '%2e%2e'
+    res5: SecretFetchResult = prov.get("%2e%2e%2fadmin")
+    assert not res5.found
+    assert res5.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+
+    # NET-02: Key containing null byte
+    res6: SecretFetchResult = prov.get("secret\0extra")
+    assert not res6.found
+    assert res6.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
 
     print("PASS: test_key_traversal_and_injection_rejection")
 

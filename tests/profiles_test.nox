@@ -157,10 +157,38 @@ def test_profile_01_production_strict_checks() -> None:
     assert prod_snap.get_secret("DB_SECRET") == "super-strong-production-token"
     print("PASS: test_profile_01_production_strict_checks")
 
+def test_dynamic_profile_switching_state_consistency() -> None:
+    # CONF-02: Switching profile dynamically updates is_production accurately
+    builder: ConfigBuilder = ConfigBuilder()
+    assert not builder.is_production
+    assert builder.profile == "development"
+
+    # Switch to production
+    builder.with_profile("production")
+    assert builder.is_production
+    assert builder.profile == "production"
+
+    # Switch back to development -> is_production MUST reset to False!
+    builder.with_profile("development")
+    assert not builder.is_production
+    assert builder.profile == "development"
+
+    # Switch to test -> False
+    builder.with_profile("test")
+    assert not builder.is_production
+    assert builder.profile == "test"
+
+    # Switch to prod -> True
+    builder.with_profile("prod")
+    assert builder.is_production
+    assert builder.profile == "prod"
+    print("PASS: test_dynamic_profile_switching_state_consistency")
+
 # Run all test functions
 test_profile_name_validation()
 test_profile_filename_formatting()
 test_profile_02_unknown_profile_rejection()
 test_profile_overlay_precedence()
 test_profile_01_production_strict_checks()
+test_dynamic_profile_switching_state_consistency()
 print("ALL PROFILES TESTS PASSED SUCCESSFULLY!")

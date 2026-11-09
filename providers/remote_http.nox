@@ -115,23 +115,68 @@ def validate_https_endpoint(url: str, allowlist: list[str]) -> bool:
     if nox.strings.contains(authority, "@"):
         return False
 
-    # 3. Parse host and optional port
+    # 3. Reject URL-encoded characters in authority to prevent hostname obfuscation (NET-02)
+    if nox.strings.contains(authority, "%"):
+        return False
+
+    # 4. Parse host and optional port, accounting for bracketed IPv6 notation
     host: str = authority
     port: str = ""
-    colon_idx: int = nox.strings.index_of(authority, ":")
-    if colon_idx >= 0:
-        host = authority[0:colon_idx]
-        port = authority[colon_idx + 1:len(authority)]
+    if nox.strings.starts_with(authority, "["):
+        r_bracket: int = nox.strings.index_of(authority, "]")
+        if r_bracket < 0:
+            return False
+        host = authority[0:r_bracket + 1]
+        if len(authority) > r_bracket + 1:
+            after_bracket: str = authority[r_bracket + 1:len(authority)]
+            if nox.strings.starts_with(after_bracket, ":"):
+                port = after_bracket[1:len(after_bracket)]
+    else:
+        colon_idx: int = nox.strings.index_of(authority, ":")
+        if colon_idx >= 0:
+            host = authority[0:colon_idx]
+            port = authority[colon_idx + 1:len(authority)]
 
-    # 4. SSRF check: Rejection of AWS/GCP/Azure link-local metadata and standard dangerous hosts
-    if nox.strings.starts_with(host, "169.254."):
+    # 5. SSRF checks: Rejection of private/unroutable addresses, loopbacks, and cloud metadata (NET-02)
+    # A. Loopback addresses (all 127.0.0.0/8 variants and localhost)
+    if nox.strings.starts_with(host, "127."):
         return False
+    if host == "localhost" or nox.strings.ends_with(host, ".localhost"):
+        return False
+
+    # B. Unroutable / broadcast
     if host == "0.0.0.0" or host == "255.255.255.255":
         return False
-    if host == "127.0.0.1" or host == "localhost":
+
+    # C. Cloud link-local metadata (AWS/GCP/Azure)
+    if nox.strings.starts_with(host, "169.254."):
         return False
 
-    # 5. Allowlist membership check (exact host or exact authority match)
+    # D. RFC 1918 Private IPv4 ranges
+    if nox.strings.starts_with(host, "10."):
+        return False
+    if nox.strings.starts_with(host, "192.168."):
+        return False
+    if nox.strings.starts_with(host, "172."):
+        s_idx: int = 16
+        while s_idx <= 31:
+            if nox.strings.starts_with(host, "172." + str(s_idx) + "."):
+                return False
+            s_idx = s_idx + 1
+
+    # E. IPv6 loopback, link-local, unique local, and IPv4-mapped
+    if host == "::1" or host == "[::1]" or host == "[0:0:0:0:0:0:0:1]":
+        return False
+    if nox.strings.starts_with(host, "[fe80:") or nox.strings.starts_with(host, "fe80:"):
+        return False
+    if nox.strings.starts_with(host, "[fc00:") or nox.strings.starts_with(host, "fc00:"):
+        return False
+    if nox.strings.starts_with(host, "[fd00:") or nox.strings.starts_with(host, "fd00:"):
+        return False
+    if nox.strings.starts_with(host, "[::ffff:") or nox.strings.starts_with(host, "::ffff:"):
+        return False
+
+    # 6. Allowlist membership check (exact host or exact authority match)
     matched: bool = False
     idx: int = 0
     while idx < len(allowlist):
@@ -147,10 +192,16 @@ def _validate_secret_key_path(key: str) -> None:
         raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "empty secret key not permitted in remote endpoint")
     if nox.strings.contains(key, "/") or nox.strings.contains(key, "\\"):
         raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain path traversal or separator characters")
+    if nox.strings.contains(key, ".."):
+        raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain directory traversal elements")
     if nox.strings.contains(key, "?") or nox.strings.contains(key, "#"):
         raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain query or fragment delimiters")
     if nox.strings.contains(key, " ") or nox.strings.contains(key, "\t"):
         raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain whitespace")
+    if nox.strings.contains(key, "%"):
+        raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain URL-encoded sequences")
+    if nox.strings.contains(key, "\0"):
+        raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain null bytes")
 
 class RemoteHttpSecretProvider(SecretProvider):
     base_url: str

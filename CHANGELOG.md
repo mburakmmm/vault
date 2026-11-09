@@ -5,6 +5,37 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-11-09 (Snapshot Encapsulation, True Concurrency & SSRF Hardening)
+
+### Fixed
+- **Strict Secret Gate on `get_entry()` & Safe Metadata Inspection (IMMUT-03):**
+  - Updated `ConfigSnapshot.get_entry(key)` to fail closed (`ERR_CONFIG_SECRET_SOURCE_DENIED`) on keys classified as secrets, eliminating the API-boundary bypass where `.val` could disclose secrets without explicit authorization.
+  - Added `ConfigSnapshot.get_secret_entry(key: str) -> ConfigEntry` for intentional and traceable secret retrieval.
+  - Added `ConfigSnapshot.get_metadata(key: str) -> ConfigEntry` returning complete entry metadata while strictly masking `.val = make_string("[REDACTED]")` for secrets.
+  - Added regression test `test_snapshot_secret_entry_encapsulation` in `tests/redaction_test.nox`.
+- **True Concurrent Multi-Task Reload Stress Testing & Reentrancy Guard (RELOAD-02):**
+  - Added an atomic `is_reloading: bool` guard in `ReloadManager.reload()` to reject reentrant or overlapping reload executions with error code `CONFIG_RELOAD_IN_PROGRESS`.
+  - Added `test_true_concurrent_readers_and_writer_stress` in `tests/reload_test.nox` running 3 concurrent reader tasks across 600 continuous reads concurrently with an active writer reload using native `spawn` and `await`, proving zero torn reads or intermediate states.
+- **Advanced SSRF Protection & Hostname Sanitization (NET-02):**
+  - Hardened `validate_https_endpoint()` in `providers/remote_http.nox` to unconditionally reject:
+    - IPv6 loopbacks (`[::1]`, `::1`, `[0:0:0:0:0:0:0:1]`)
+    - Alternative IPv4 loopbacks (`127.0.0.0/8` subnet: `127.0.0.2`, `127.1.2.3`, etc.)
+    - Localhost domains (`localhost`, `*.localhost`)
+    - IPv6 link-local (`[fe80:*`) and Unique Local IPv6 (`[fc00:*`, `[fd00:*`)
+    - IPv4-mapped IPv6 (`[::ffff:*`)
+    - RFC 1918 private IPv4 networks (`10.*`, `192.168.*`, `172.16.*`–`172.31.*`)
+    - URL-encoded characters (`%`) in authority to prevent hostname obfuscation.
+  - Hardened `_validate_secret_key_path()` to reject URL-encoded sequences (`%`), directory traversal elements (`..`), and null bytes (`\0`).
+- **Dynamic Profile Switching State Consistency (CONF-02):**
+  - Fixed `ConfigBuilder.with_profile()` so that switching from `"production"` to `"development"` or `"test"` immediately resets `self.is_production = False`, ensuring builder state integrity.
+  - Added `test_dynamic_profile_switching_state_consistency` in `tests/profiles_test.nox`.
+
+### Added
+- **1,000-Field Comprehensive Schema Benchmark (TEST-01):**
+  - Added `test_large_scale_schema_benchmark_1000_fields` in `tests/benchmark_test.nox` testing 1,000 declared schema fields (500 strings, 300 integers with range bounds, 200 booleans) with type validation, bounds checks, and required rules. Executed in 1 ms.
+- **Accurate Documentation of Test Suite Coverage (DOCS-01):**
+  - Updated `README.md` to accurately document all 20 passing test suites including `tests/benchmark_test.nox`.
+
 ## [1.0.2] - 2026-11-09 (Security, Immutability & Concurrency Hardening)
 
 ### Fixed
