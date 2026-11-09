@@ -155,3 +155,63 @@ def test_large_scale_schema_benchmark_1000_fields() -> None:
 
 test_large_scale_schema_benchmark_1000_fields()
 print("PASS: test_large_scale_schema_benchmark_1000_fields")
+
+def test_statistical_benchmark_multirun() -> None:
+    # TEST-02: Multi-run microbenchmark with warm-up (10 runs) collecting min/avg/max telemetry
+    # Reusable schema with 200 validated fields
+    schema: ConfigSchema = ConfigSchema()
+    s_idx: int = 0
+    while s_idx < 100:
+        schema.add_string("STAT_STR_" + str(s_idx), True, False, "", False, True)
+        schema.add_int("STAT_INT_" + str(s_idx), True, False, 0, True, 0, True, 100000, False)
+        s_idx = s_idx + 1
+
+    # Reusable memory source with 1,000 keys
+    mem_src: MemorySource = MemorySource("stat_bench_mem", 2, "base", False)
+    k_idx: int = 0
+    while k_idx < 100:
+        mem_src.set_string("STAT_STR_" + str(k_idx), "stat_value_" + str(k_idx))
+        mem_src.set_string("STAT_INT_" + str(k_idx), str(k_idx * 10))
+        k_idx = k_idx + 1
+    extra_idx: int = 0
+    while extra_idx < 800:
+        mem_src.set_string("EXTRA_KEY_" + str(extra_idx), "val_" + str(extra_idx))
+        extra_idx = extra_idx + 1
+
+    # Warm-up run (1 iteration, unmeasured)
+    warmup_builder: ConfigBuilder = ConfigBuilder()
+    warmup_builder.with_source(mem_src)
+    warmup_builder.with_schema(schema)
+    warmup_snap: ConfigSnapshot = warmup_builder.build()
+    assert_true(len(warmup_snap.keys()) == 1000, "Warm-up must produce 1000 keys")
+
+    # 10 Measured runs
+    runs: int = 10
+    total_ms: int = 0
+    min_ms: int = 999999
+    max_ms: int = 0
+
+    run_idx: int = 0
+    while run_idx < runs:
+        t0: int = nox.time.now_ms()
+        b: ConfigBuilder = ConfigBuilder()
+        b.with_source(mem_src)
+        b.with_schema(schema)
+        s: ConfigSnapshot = b.build()
+        elapsed: int = nox.time.now_ms() - t0
+
+        assert_true(len(s.keys()) == 1000, "Snapshot in run " + str(run_idx) + " must have 1000 keys")
+        total_ms = total_ms + elapsed
+        if elapsed < min_ms:
+            min_ms = elapsed
+        if elapsed > max_ms:
+            max_ms = elapsed
+
+        run_idx = run_idx + 1
+
+    avg_ms: int = total_ms // runs
+    print("Statistical Benchmark (10 runs, 1000 keys): min=" + str(min_ms) + "ms, max=" + str(max_ms) + "ms, avg=" + str(avg_ms) + "ms")
+    assert_true(avg_ms < 1000, "Statistical average latency must be < 1000ms, actual: " + str(avg_ms) + " ms")
+
+test_statistical_benchmark_multirun()
+print("PASS: test_statistical_benchmark_multirun")

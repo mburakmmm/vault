@@ -202,6 +202,17 @@ def test_snapshot_secret_entry_encapsulation() -> None:
     sec_entry: ConfigEntry = snap.get_secret_entry("SECRET_TOKEN")
     assert sec_entry.is_secret
     assert sec_entry.val.s == "top_secret_value_xyz"
+
+    # 5. IMMUT-04: Direct dictionary access via snap.entries NEVER discloses secret values!
+    direct_dict: dict[str, ConfigEntry] = snap.entries
+    direct_dict_entry: ConfigEntry = direct_dict["SECRET_TOKEN"]
+    assert direct_dict_entry.is_secret
+    assert direct_dict_entry.val.s == "[REDACTED]"
+
+    # 6. Mutating the returned dictionary does NOT alter internal snapshot state!
+    direct_dict_entry.val.s = "HACKED_NAME"
+    assert snap.get_secret("SECRET_TOKEN") == "top_secret_value_xyz"
+
     print("PASS: test_snapshot_secret_entry_encapsulation")
 
 # Run all test functions

@@ -5,6 +5,29 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-11-09 (Total Snapshot Encapsulation, Hardware Atomic CAS Concurrency & SSRF Hardening)
+
+### Fixed
+- **Complete Snapshot Secret Encapsulation (IMMUT-04):**
+  - Transformed `ConfigSnapshot.entries` into a `@property` returning an isolated defensive dictionary where every secret entry has its underlying value strictly redacted to `[REDACTED]`.
+  - Stored raw entries in private `self._entries`, preventing external callers from bypassing secret gate mechanisms via direct dictionary access (e.g. `snapshot.entries["KEY"].val.s`).
+  - Mutating the dictionary or entries returned by `snapshot.entries` has zero effect on the internal snapshot state.
+  - Added dedicated test `test_snapshot_secret_entry_encapsulation` in `tests/redaction_test.nox`.
+- **Hardware-Level Atomic CAS Concurrency Guard (RELOAD-03):**
+  - Replaced boolean reentrancy flags in `ReloadManager` with hardware atomic `nox.atomic.new_bool(False)`.
+  - Guarded critical reload transitions with atomic `compare_and_swap(False, True)` to eliminate multi-threaded race conditions during concurrent reloads.
+  - Added cooperative yields (`nox.time.sleep_ms(1)`) in async reader and writer stress tests to guarantee interleaved task scheduling across both cooperative (QBE) and parallel (LLVM) backends.
+- **Obfuscated IP & Pre/Post-Resolution SSRF Hardening (NET-03):**
+  - Implemented `is_numeric_or_obfuscated_host()` rejecting DWORD/decimal integer hosts (e.g. `https://2130706433/`), octal octets (`https://0177.0.0.1/`), abbreviated IPs (`https://127.1/`), and hex-encoded IPs (`0x7f000001`).
+  - Implemented `validate_resolved_ip()` rejecting all loopback subnets (`127.0.0.0/8`), RFC 1918 private ranges, carrier-grade NAT (`100.64.0.0/10`), IPv6 loopbacks/link-local/unique-local, and cloud link-local metadata (`169.254.169.254`).
+  - Added comprehensive test coverage in `tests/remote_provider_test.nox`.
+
+### Added
+- **Statistical Multi-Run Microbenchmark (TEST-02):**
+  - Added `test_statistical_benchmark_multirun` in `tests/benchmark_test.nox` performing 1 unmeasured warm-up run + 10 measured runs of 1,000 keys across schema validation and interpolation, reporting `min`, `max`, and `avg` latency telemetry.
+
+
+
 ## [1.0.3] - 2026-11-09 (Snapshot Encapsulation, True Concurrency & SSRF Hardening)
 
 ### Fixed

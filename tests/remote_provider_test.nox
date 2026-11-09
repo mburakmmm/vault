@@ -8,7 +8,7 @@ from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG
 from schema.fields import ConfigSchema
 from secrets.mark import SecretValue
 from providers.interface import SecretFetchResult, ProviderHealth
-from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, HttpResponse, validate_https_endpoint
+from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host
 
 def test_ssrf_and_scheme_validation() -> None:
     allowlist: list[str] = ["vault.corp.internal"]
@@ -22,14 +22,15 @@ def test_ssrf_and_scheme_validation() -> None:
         "169.254.169.254", "0.0.0.0", "255.255.255.255",
         "127.0.0.1", "127.0.0.2", "127.1.2.3", "localhost", "app.localhost",
         "[::1]", "::1", "[0:0:0:0:0:0:0:1]", "[fe80::1]", "[::ffff:127.0.0.1]",
-        "10.0.0.1", "192.168.1.1", "172.16.0.1", "172.31.255.255"
+        "10.0.0.1", "192.168.1.1", "172.16.0.1", "172.31.255.255",
+        "2130706433", "0177.0.0.1", "127.1", "0x7f000001", "100.64.0.1"
     ]
     assert not validate_https_endpoint("https://169.254.169.254/latest/meta-data", dangerous_allowlist)
     assert not validate_https_endpoint("https://169.254.1.1/secret", dangerous_allowlist)
     assert not validate_https_endpoint("https://0.0.0.0/secret", dangerous_allowlist)
     assert not validate_https_endpoint("https://255.255.255.255/secret", dangerous_allowlist)
 
-    # NET-02: Advanced SSRF rejection (IPv6, alternative loopbacks, link-local, RFC 1918)
+    # NET-02 & NET-03: Advanced SSRF rejection (IPv6, alternative loopbacks, link-local, RFC 1918, CGNAT)
     assert not validate_https_endpoint("https://127.0.0.2/secret", dangerous_allowlist)
     assert not validate_https_endpoint("https://127.1.2.3/secret", dangerous_allowlist)
     assert not validate_https_endpoint("https://app.localhost/secret", dangerous_allowlist)
@@ -41,6 +42,35 @@ def test_ssrf_and_scheme_validation() -> None:
     assert not validate_https_endpoint("https://192.168.1.1/secret", dangerous_allowlist)
     assert not validate_https_endpoint("https://172.16.0.1/secret", dangerous_allowlist)
     assert not validate_https_endpoint("https://172.31.255.255/secret", dangerous_allowlist)
+
+    # NET-03: Rejection of numeric / obfuscated hosts (dword, octal, abbreviated, hex)
+    assert not validate_https_endpoint("https://2130706433/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://0177.0.0.1/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://127.1/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://0x7f000001/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://100.64.0.1/secret", dangerous_allowlist)
+    assert not validate_https_endpoint("https://100.127.255.1/secret", dangerous_allowlist)
+
+    # NET-03: Unit checks for is_numeric_or_obfuscated_host
+    assert is_numeric_or_obfuscated_host("2130706433")
+    assert is_numeric_or_obfuscated_host("0x7f000001")
+    assert is_numeric_or_obfuscated_host("0177.0.0.1")
+    assert is_numeric_or_obfuscated_host("127.1")
+    assert not is_numeric_or_obfuscated_host("vault.corp.internal")
+    assert not is_numeric_or_obfuscated_host("api.acme.com")
+
+    # NET-03: Unit checks for validate_resolved_ip
+    assert not validate_resolved_ip("127.0.0.1")
+    assert not validate_resolved_ip("10.0.0.1")
+    assert not validate_resolved_ip("192.168.0.1")
+    assert not validate_resolved_ip("172.16.0.1")
+    assert not validate_resolved_ip("169.254.169.254")
+    assert not validate_resolved_ip("100.64.0.1")
+    assert not validate_resolved_ip("::1")
+    assert not validate_resolved_ip("fe80::1")
+    assert not validate_resolved_ip("fc00::1")
+    assert validate_resolved_ip("93.184.216.34")
+    assert validate_resolved_ip("2606:2800:220:1:248:1893:25c8:1946")
 
     # 3. Reject hosts not in allowlist
     assert not validate_https_endpoint("https://evil-attacker.com/secret", allowlist)

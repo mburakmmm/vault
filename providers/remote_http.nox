@@ -86,6 +86,103 @@ class MockHttpTransport(HttpTransport):
         empty_h: dict[str, str] = {}
         return HttpResponse(404, empty_h, "route not found", False, "")
 
+def is_all_digits(s: str) -> bool:
+    if len(s) == 0:
+        return False
+    idx: int = 0
+    while idx < len(s):
+        ch: str = s[idx]
+        if ch < "0" or ch > "9":
+            return False
+        idx = idx + 1
+    return True
+
+def is_numeric_or_obfuscated_host(host: str) -> bool:
+    # 1. Hex prefix
+    if nox.strings.contains(host, "0x") or nox.strings.contains(host, "0X"):
+        return True
+
+    # 2. Pure integer/dword host (e.g. 2130706433 or 0)
+    if is_all_digits(host):
+        return True
+
+    # 3. Dotted numeric checks
+    if nox.strings.contains(host, "."):
+        parts: list[str] = nox.strings.split(host, ".")
+        all_numeric: bool = True
+        idx: int = 0
+        while idx < len(parts):
+            if not is_all_digits(parts[idx]):
+                all_numeric = False
+            idx = idx + 1
+
+        if all_numeric:
+            # Abbreviated IPs like 127.1 or 10.1
+            if len(parts) != 4:
+                return True
+            # Octal leading zero in any octet (e.g. 0177.0.0.1)
+            p_idx: int = 0
+            while p_idx < len(parts):
+                part: str = parts[p_idx]
+                if len(part) > 1 and nox.strings.starts_with(part, "0"):
+                    return True
+                p_idx = p_idx + 1
+
+    return False
+
+def validate_resolved_ip(ip: str) -> bool:
+    # NET-03: Validates that an IP address (e.g. from DNS resolution or host check) is safe
+    # Rejects loopback, private, link-local, carrier NAT, and cloud metadata
+    cleaned: str = nox.strings.trim(ip)
+    if len(cleaned) == 0:
+        return False
+
+    # IPv4 Loopback
+    if nox.strings.starts_with(cleaned, "127."):
+        return False
+
+    # Unroutable / Zero / Broadcast
+    if cleaned == "0.0.0.0" or cleaned == "255.255.255.255":
+        return False
+
+    # Cloud link-local metadata (AWS/Azure/GCP)
+    if nox.strings.starts_with(cleaned, "169.254."):
+        return False
+
+    # RFC 1918 Private IPv4
+    if nox.strings.starts_with(cleaned, "10."):
+        return False
+    if nox.strings.starts_with(cleaned, "192.168."):
+        return False
+    if nox.strings.starts_with(cleaned, "172."):
+        s_idx: int = 16
+        while s_idx <= 31:
+            if nox.strings.starts_with(cleaned, "172." + str(s_idx) + "."):
+                return False
+            s_idx = s_idx + 1
+
+    # Carrier-grade NAT (100.64.0.0/10)
+    if nox.strings.starts_with(cleaned, "100."):
+        cg_idx: int = 64
+        while cg_idx <= 127:
+            if nox.strings.starts_with(cleaned, "100." + str(cg_idx) + "."):
+                return False
+            cg_idx = cg_idx + 1
+
+    # IPv6 loopback & link-local
+    if cleaned == "::1" or cleaned == "[::1]" or cleaned == "0:0:0:0:0:0:0:1" or cleaned == "[0:0:0:0:0:0:0:1]":
+        return False
+    if nox.strings.starts_with(cleaned, "fe80:") or nox.strings.starts_with(cleaned, "[fe80:"):
+        return False
+    if nox.strings.starts_with(cleaned, "fc00:") or nox.strings.starts_with(cleaned, "[fc00:"):
+        return False
+    if nox.strings.starts_with(cleaned, "fd00:") or nox.strings.starts_with(cleaned, "[fd00:"):
+        return False
+    if nox.strings.starts_with(cleaned, "::ffff:") or nox.strings.starts_with(cleaned, "[::ffff:"):
+        return False
+
+    return True
+
 def _extract_authority(https_url: str) -> str:
     # URL is verified to start with https:// (len 8)
     without_scheme: str = https_url[8:len(https_url)]
@@ -137,46 +234,19 @@ def validate_https_endpoint(url: str, allowlist: list[str]) -> bool:
             host = authority[0:colon_idx]
             port = authority[colon_idx + 1:len(authority)]
 
-    # 5. SSRF checks: Rejection of private/unroutable addresses, loopbacks, and cloud metadata (NET-02)
-    # A. Loopback addresses (all 127.0.0.0/8 variants and localhost)
-    if nox.strings.starts_with(host, "127."):
+    # 5. NET-03: SSRF Rejection of numeric or obfuscated hosts (hex, decimal integer IP, octal, abbreviated IPs)
+    if is_numeric_or_obfuscated_host(host):
         return False
+
+    # 6. NET-03: General IP validation (reject loopback, private, link-local, carrier NAT, cloud metadata)
+    if not validate_resolved_ip(host):
+        return False
+
+    # 7. Localhost names
     if host == "localhost" or nox.strings.ends_with(host, ".localhost"):
         return False
 
-    # B. Unroutable / broadcast
-    if host == "0.0.0.0" or host == "255.255.255.255":
-        return False
-
-    # C. Cloud link-local metadata (AWS/GCP/Azure)
-    if nox.strings.starts_with(host, "169.254."):
-        return False
-
-    # D. RFC 1918 Private IPv4 ranges
-    if nox.strings.starts_with(host, "10."):
-        return False
-    if nox.strings.starts_with(host, "192.168."):
-        return False
-    if nox.strings.starts_with(host, "172."):
-        s_idx: int = 16
-        while s_idx <= 31:
-            if nox.strings.starts_with(host, "172." + str(s_idx) + "."):
-                return False
-            s_idx = s_idx + 1
-
-    # E. IPv6 loopback, link-local, unique local, and IPv4-mapped
-    if host == "::1" or host == "[::1]" or host == "[0:0:0:0:0:0:0:1]":
-        return False
-    if nox.strings.starts_with(host, "[fe80:") or nox.strings.starts_with(host, "fe80:"):
-        return False
-    if nox.strings.starts_with(host, "[fc00:") or nox.strings.starts_with(host, "fc00:"):
-        return False
-    if nox.strings.starts_with(host, "[fd00:") or nox.strings.starts_with(host, "fd00:"):
-        return False
-    if nox.strings.starts_with(host, "[::ffff:") or nox.strings.starts_with(host, "::ffff:"):
-        return False
-
-    # 6. Allowlist membership check (exact host or exact authority match)
+    # 8. Allowlist membership check (exact host or exact authority match)
     matched: bool = False
     idx: int = 0
     while idx < len(allowlist):

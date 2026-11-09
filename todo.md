@@ -2,6 +2,56 @@
 
 ---
 
+## 🚀 VAULT v1.0.4 Patch Release (Completed & Verified)
+
+Addressing findings from the v1.0.3 technical review:
+
+### 🚨 P0: Complete Snapshot Encapsulation & Field Sanitization
+
+- [x] **IMMUT-04: Snapshot `entries` Encapsulation & Total Secret Isolation**
+  - **File:** `core/snapshot.nox`, `tests/redaction_test.nox`
+  - **Remediation:**
+    1. Internal storage renamed to private `_entries: dict[str, ConfigEntry]`.
+    2. Exposed `@property def entries(self: ConfigSnapshot) -> dict[str, ConfigEntry]` returning a sanitized defensive clone where secret entries have `.val = make_string("[REDACTED]")`.
+    3. Verified mutating `snapshot.entries["KEY"]` has zero effect on `_entries`.
+    4. Verified `test_snapshot_secret_entry_encapsulation` passes on LLVM and QBE.
+  - **Status:** Complete & Verified
+
+### 🔒 P1: True Atomic CAS Concurrency & Post-Resolve SSRF Defenses
+
+- [x] **RELOAD-03: Hardware-Level Atomic Compare-And-Swap & Interleaved Task Test**
+  - **File:** `reload/manager.nox`, `tests/reload_test.nox`
+  - **Remediation:**
+    1. Replaced boolean flag with `nox.atomic.new_bool(False)`.
+    2. Guarded critical reload transitions with atomic `compare_and_swap(False, True)`.
+    3. Added cooperative context switches (`nox.time.sleep_ms(1)`) in concurrent reader/writer loops in `tests/reload_test.nox`.
+    4. Verified interleaved concurrency passes on both cooperative and parallel backends.
+  - **Status:** Complete & Verified
+
+- [x] **NET-03: Post-Resolve IP Validation & Numeric Host Obfuscation Defense**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Implemented `validate_resolved_ip(ip: str) -> bool` rejecting loopback, private, link-local, carrier NAT, and cloud metadata.
+    2. Implemented `is_numeric_or_obfuscated_host()` rejecting decimal integers (`2130706433`), octal (`0177.0.0.1`), abbreviated (`127.1`), and hex (`0x7f000001`).
+    3. Integrated into `validate_https_endpoint()` and verified with extensive unit/integration tests in `tests/remote_provider_test.nox`.
+  - **Status:** Complete & Verified
+
+### ⚡ P2: Statistical Benchmark & Distribution
+
+- [x] **TEST-02: Statistical Multi-Run Benchmark with Warm-up**
+  - **File:** `tests/benchmark_test.nox`
+  - **Remediation:** Added `test_statistical_benchmark_multirun()` performing 1 unmeasured warm-up + 10 measured runs of 1000 keys with min/max/avg telemetry (`min=0ms, max=1ms, avg=0ms`).
+  - **Status:** Complete & Verified
+
+- [x] **DIST-02: Release & Version Bump to v1.0.4**
+  - **File:** `nox.json`, `vault.nox`, `cli/main.nox`, tests, `CHANGELOG.md`, `README.md`
+  - **Remediation:** Bumped version to `1.0.4` across all components and manifests.
+  - **Status:** Complete & Verified
+  - **Remediation:** Bump version to 1.0.4, verify all 20 tests pass across QBE and LLVM, tag and publish.
+  - **Status:** Pending
+
+---
+
 ## ✅ VAULT v1.0.3 Patch Release (Completed & Verified)
 
 Addressing findings from the v1.0.2 technical review:

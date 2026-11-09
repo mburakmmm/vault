@@ -7,6 +7,7 @@ from core.errors import ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_INTERPOLATION_CYCLE
 from schema.fields import ConfigSchema
 from sources.memory import MemorySource
 from reload.manager import ReloadManager, ReloadResult
+import nox.time
 
 def test_reload_02_successful_reload() -> None:
     # Set up schema and memory source
@@ -206,21 +207,21 @@ def test_concurrent_reader_consistency_during_reload() -> None:
     print("PASS: test_concurrent_reader_consistency_during_reload")
 
 def test_reload_reentrancy_guard() -> None:
-    # RELOAD-02: Simultaneous reentrant reload attempts are safely rejected
+    # RELOAD-02, RELOAD-03: Atomic CAS guard rejects simultaneous reentrant reload attempts
     mem_src: MemorySource = MemorySource("reentrant_mem", 5, "base", False)
     mem_src.set_string("KEY", "val")
     builder: ConfigBuilder = ConfigBuilder()
     builder.with_source(mem_src)
     mgr: ReloadManager = ReloadManager(builder)
 
-    mgr.is_reloading = True # Simulate concurrent reload in progress
+    mgr.set_reloading_for_test(True) # Simulate concurrent reload in progress
     res: ReloadResult = mgr.reload()
     assert not res.success
     assert res.error_code == "CONFIG_RELOAD_IN_PROGRESS"
-    mgr.is_reloading = False
+    mgr.set_reloading_for_test(False)
     print("PASS: test_reload_reentrancy_guard")
 
-# Module-level fixtures for true concurrent multi-task stress test (RELOAD-02)
+# Module-level fixtures for true concurrent multi-task stress test (RELOAD-02, RELOAD-03)
 schema_stress: ConfigSchema = ConfigSchema()
 schema_stress.add_string("APP_NAME", True, True, "DefaultApp", False, True)
 schema_stress.add_int("PORT", True, False, 0, True, 1024, True, 65535, False)
@@ -236,7 +237,6 @@ b_stress.with_source(mem_stress)
 mgr_stress: ReloadManager = ReloadManager(b_stress)
 
 async def concurrent_reader_task(task_id: int) -> int:
-    # Only primitive types (int) packed across async tasks under non-release mode
     valid_reads: int = 0
     i: int = 0
     while i < 150:
@@ -249,10 +249,16 @@ async def concurrent_reader_task(task_id: int) -> int:
             valid_reads = valid_reads + 1
         elif port == 9092 and name == "Version2App":
             valid_reads = valid_reads + 1
+
+        # Yield execution to force scheduler context switches on cooperative (QBE) & parallel (LLVM) backends
+        if i % 25 == 0:
+            nox.time.sleep_ms(1)
         i = i + 1
     return valid_reads
 
 async def concurrent_writer_task(step: int) -> bool:
+    # Small pause to ensure readers are actively polling during reload
+    nox.time.sleep_ms(2)
     mem_stress.set_string("APP_NAME", "Version2App")
     mem_stress.set_string("PORT", "9092")
     res: ReloadResult = mgr_stress.reload()
