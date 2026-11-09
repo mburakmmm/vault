@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v1.0.0)'
+        description: 'Tag to release (e.g. v1.0.1)'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 concurrency:
   group: release-${{ github.ref }}
@@ -98,12 +98,16 @@ jobs:
           noxc check adapters/noxen.nox
           noxc check adapters/nova.nox
 
-      - name: Run Test Suites
+      - name: Run Test Suites (QBE Backend)
         run: |
-          noxc test
+          noxc test --backend qbe
+
+      - name: Run Test Suites (LLVM Backend)
+        run: |
+          noxc test --backend llvm
 
   publish-release:
-    name: Create GitHub Release & Publish Package
+    name: Create GitHub Release & Package Distribution
     needs: [ci-gate]
     runs-on: ubuntu-latest
     permissions:
@@ -157,11 +161,11 @@ jobs:
               out.write(notes + "\n")
           '
 
-      - name: Package Distribution Archives
+      - name: Package Distribution Archives (Safe git-archive)
         run: |
           TAG="${{ steps.vars.outputs.tag }}"
-          tar --exclude='.git' --exclude='.github' --exclude='*.tar.gz' --exclude='*.zip' -czf "vault-${TAG}.tar.gz" .
-          zip -r "vault-${TAG}.zip" . -x '*.git*' '*.github*' '*.tar.gz' '*.zip'
+          git archive --format=tar.gz --output="${{ runner.temp }}/vault-${TAG}.tar.gz" --prefix="vault-${TAG}/" HEAD
+          git archive --format=zip --output="${{ runner.temp }}/vault-${TAG}.zip" --prefix="vault-${TAG}/" HEAD
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -172,7 +176,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            vault-${{ steps.vars.outputs.tag }}.tar.gz
-            vault-${{ steps.vars.outputs.tag }}.zip
+            ${{ runner.temp }}/vault-${{ steps.vars.outputs.tag }}.tar.gz
+            ${{ runner.temp }}/vault-${{ steps.vars.outputs.tag }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

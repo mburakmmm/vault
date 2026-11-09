@@ -1,355 +1,102 @@
-# VAULT — Proje Yol Haritası ve Görev Takip Listesi (`todo.md`)
+# VAULT v1.0.1 Patch Release — TODO & Remediation Matrix
 
-> **Proje:** `vault` — NOX 2.x için Bağımsız, Güvenli, Tip Korumalı Konfigürasyon, Ortam ve Sır (Secret) Yönetim Kütüphanesi  
-> **Temel Altyapı:** NOX v2.0.123 (Doğrulanmış ve Sabitlenmiş)  
-> **Kaynak Doküman:** [`AGENTS.md`](./AGENTS.md)  
-> **Durum:** v1.0.0 Tamamlandı — Üretime Hazır ve Doğrulandı (LLVM & QBE Yeşil)  
+Tracked remediation plan addressing all architectural, security, and correctness findings from the v1.0.0 independent review.
 
 ---
 
-## 🎯 Proje Hedefleri ve Temel İlkeler
+## 🚨 P0: Critical Security & Confinement Vulnerabilities
 
-1. **NOX Native & Standalone:** Dış ekosistem bağımlılığı olmaksızın sadece NOX 2.x ve standart kütüphane (`nox.os`, `nox.fs`, `nox.path`, `nox.strings`, `nox.json`, `nox.toml`, `nox.yaml`, `nox.crypto`, `nox.log`, `nox.time`) kullanılarak yazılır.
-2. **Never Invent APIs:** NOX standart kütüphane ve dil özellikleri varsayılmayacak; önce yetenek probları (capability probes) derlenip çalıştırılarak doğrulanacaktır.
-3. **Safe by Default & Fail-Closed:** `.env` dosyası okunurken işletim sistemi ortamı (`os.environ`) otomatik kirletilmez. Zorunlu değerler eksik veya geçersizse sessiz fallback yapılmaz, derhal hata verilir.
-4. **Sıfır Sır Sızıntısı (Zero Secret Leakage):** Sır (secret) işaretli hiçbir değer istisnalarda, hata mesajlarında, `to_json` çıktılarında, loglarda veya raporlarda yer alamaz. Otomatik maskeleme `[REDACTED]` zorunludur.
-5. **Deterministik Öncelik & Provenance:** Hangi ayarın hangi kaynaktan kazandığı tekil, net ve sır içermeyen bir izleme kaydıyla (`explain`) doğrulanabilir olmalıdır.
-6. **Sınırlandırılmış Girdi (Bounded Limits):** Dosya boyutu, anahtar sayısı, değer uzunluğu ve interpolasyon derinliği katı sınırlarla korunacaktır.
+- [x] **SEC-01: Linux & Unix Root Confinement Case-Sensitivity**
+  - **File:** `sources/files.nox`
+  - **Issue:** `check_path_confinement()` uses `eq_ignore_case()` on all platforms. On Linux/Unix, `/data/config` and `/data/Config` are distinct paths; case-insensitivity allows confinement bypass.
+  - **Remediation:** Implemented platform-aware component comparison (case-sensitive on Unix/Linux/macOS, case-insensitive only on Windows).
+  - **Status:** Complete (Verified in `tests/security_test.nox`)
 
----
+- [x] **SEC-02: Dotenv Root Confinement Conformance**
+  - **File:** `env/source.nox`, `core/builder.nox`
+  - **Issue:** `DotenvSource` reads paths directly via `read_to_string()` without enforcing `allowed_root` confinement.
+  - **Remediation:** Added `allowed_root` parameter to `DotenvSource`, utilized `read_bounded_file()` from `sources.files`, and wired `with_allowed_root()` from `ConfigBuilder`.
+  - **Status:** Complete (Verified in `tests/security_test.nox`)
 
-## 📅 Sürüm ve Faz Dağılımı
+- [x] **SEC-03: Real `nox.http` Transport for Remote HTTPS Provider**
+  - **File:** `providers/remote_http.nox`
+  - **Issue:** `HttpTransport.send_request()` returns mock 500; only `MockHttpTransport` exists.
+  - **Remediation:** Implemented `StandardHttpTransport` using `nox.http.request` with SSL verification, timeout handling, and redirect control. Default to `StandardHttpTransport` when no mock is passed.
+  - **Status:** Complete (Verified in `providers/remote_http.nox`, `tests/remote_provider_test.nox`)
 
-| Sürüm | Faz | Kapsam | Aşama Durumu |
-| :--- | :--- | :--- | :--- |
-| **v0.1.0** | **Faz 0** | Yetenek Denetimi (Capability Audit), NOX Probları ve İskelet Paket | [x] Tamamlandı |
-| **v0.2.0** | **Faz 1** | Saf (Pure) & Bounded `.env` Ayrıştırıcı (Parser & Tokenizer) | [x] Tamamlandı |
-| **v0.2.5** | **Faz 2** | Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik | [x] Tamamlandı |
-| **v0.3.0** | **Faz 3** | Tipli Şema (Typed Schema) & Toplu Güvenli Doğrulama (**MVP Sürümü**) | [x] Tamamlandı |
-| **v0.4.0** | **Faz 4** | Yapılandırılmış Kaynaklar (JSON, TOML, YAML Köprüleri) & Kök Korumalı Dosyalar | [x] Tamamlandı |
-| **v0.5.0** | **Faz 5** | Profiller (Profiles), Değişken İnterpolasyonu & Sır Bulaşması (Secret Taint) | [x] Tamamlandı |
-| **v0.6.0** | **Faz 6** | Sır Sınıflandırması, Maskeleme (Redaction) & Güvenli İnceleme (**Pratik Paket**) | [x] Tamamlandı |
-| **v0.7.0** | **Faz 7** | Yerel Sır Sağlayıcıları (Env, Dosya ve Bellek Sağlayıcıları) | [x] Tamamlandı |
-| **v0.8.0** | **Faz 8** | Doğrulanmış Yeniden Yükleme (Atomic Reload) & Son Bilinen İyi Durum | [x] Tamamlandı |
-| **v0.9.0** | **Faz 9** | Opsiyonel Uzak Sır Sağlayıcı Çerçevesi (HTTPS, İzolasyon, SSRF Savunması) | [x] Tamamlandı |
-| **v0.9.5** | **Faz 10** | Opsiyonel CLI Aracı (`vault validate`, `explain`, `check-env`) | [x] Tamamlandı |
-| **v0.9.8** | **Faz 11** | Ekosistem Adaptörleri (Aether, Nyx, Feather vb. için ince köprüler) | [x] Tamamlandı |
-| **v1.0.0** | **Faz 12** | v1.0 Sertleştirme, Tam Regresyon Matrisi & Kararlılık Sürümü | [x] Tamamlandı |
+- [x] **SEC-04: URL Allowlist SSRF Parser & Userinfo (@) Rejection**
+  - **File:** `providers/remote_http.nox`
+  - **Issue:** `_extract_host_port()` uses simple substring and prefix check `starts_with(allowed + ":")`, allowing userinfo SSRF bypass (e.g. `https://allowed.com:pass@evil.com/`).
+  - **Remediation:** Implemented strict URL authority parser that explicitly rejects URLs containing `@` (userinfo credentials in authority) and validates host and port boundaries strictly.
+  - **Status:** Complete (Verified in `tests/remote_provider_test.nox`)
 
 ---
 
-## 🛠️ Detaylı Faz Planları ve Görev Kontrol Listeleri
+## 🔒 P1: Snapshot Immutability & Secret API Contracts
 
-### [x] Sürüm v0.1.0 — Faz 0: Yetenek Denetimi (Capability Audit) ve Paket İskeleti
-> **Hedef:** NOX v2.0.123 derleyici yeteneklerini doğrulamak, stdlib imzalarını teyit etmek ve temel paket iskeletini oluşturmak.
+- [x] **IMMUT-01: Snapshot Defensive Copying & Mutation Protection**
+  - **File:** `core/snapshot.nox`, `core/types.nox`
+  - **Issue:** `ConfigSnapshot` directly assigns the input dictionary `self.entries = entries`. Callers can mutate entries or values after publication.
+  - **Remediation:** Deep-copy entries and `ConfigEntry` objects in `ConfigSnapshot.__init__` using `clone_config_entry()`. Published snapshot cannot be corrupted from outside.
+  - **Status:** Complete (Verified in `tests/merge_test.nox`, `core/snapshot.nox`)
 
-- [x] **0.1 Paket İskeleti ve Yapılandırma**
-  - [x] `nox.json` oluştur (paket adı: `vault`, sürüm: `0.1.0`, NOX sürümü: `2.0.123`, lisans: MIT).
-  - [x] `.gitignore` oluştur (geçici dosyalar, derleme çıktıları, test artifact'leri).
-  - [x] `vault.nox` genel cephe (public facade) modülünü oluştur.
-  - [x] `README.md` başlangıç dokümanını oluştur.
-  - [x] `CHANGELOG.md` oluştur.
-  - [x] `.env.example` (yalnızca sahte/dummy değerlerle) hazırla.
-- [x] **0.2 NOX Yetenek Probları (`tests/probes/`)**
-  - [x] Özel hata sınıfları ve mesajsız hata kodları probu (`probe_errors.nox`).
-  - [x] `dict[str, T]`, `list[T]` ve veri kopyalama probu (`probe_collections.nox`).
-  - [x] `str | None`, eksik (missing), boş (empty) ve null ayrımı probu (`probe_nullability.nox`).
-  - [x] Fonksiyon tipleri ve callback mekanizmaları probu (`probe_callbacks.nox`).
-  - [x] `nox.os.getenv` yokluk davranışı (`OsError`) ve `set_var` test probu (`probe_os.nox`).
-  - [x] `nox.fs.metadata`, boyut denetimi, `canonicalize` ve symlink probu (`probe_fs.nox`).
-  - [x] `nox.json`, `nox.toml` ve `nox.yaml` ayrıştırma ve hata davranış probu (`probe_formats.nox`).
-  - [x] String dilimleme (slicing), UTF-8 BOM ve CRLF satır sonu probu (`probe_strings.nox`).
-- [x] **0.3 Dokümantasyon & Kabul Kapısı**
-  - [x] Probların çıktılarını ve stdlib imzalarını `docs/compatibility.md` dosyasına kaydet.
-  - [x] Mimari Karar Kaydı (ADR): `docs/adr/0001-value-model.md` oluştur.
-  - [x] İlk test dosyasını oluştur: `tests/package_test.nox` (gerçek bir `assert` içeren).
-  - [x] **Kabul Kapısı (Gate 0):** `noxc check vault.nox` ve `noxc test` sıfır hata ile geçecek.
+- [x] **SEC-05: Strict Secret Retrieval API Separation**
+  - **File:** `core/snapshot.nox`
+  - **Issue:** Calling `get_string()` on a key classified as a secret returns the plaintext secret without explicit intent, risking accidental logging.
+  - **Remediation:** In `get_string()`, `get_int()`, `get_float()`, `get_bool()`, and `get_list()`, check `e.is_secret`. If true, raise `ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")`.
+  - **Status:** Complete (Verified in `tests/integration_test.nox`, `tests/profiles_test.nox`)
+
+- [x] **ENC-01: UTF-8 Codepoint vs Byte Indexing in .env Parser**
+  - **File:** `env/parser.nox`
+  - **Issue:** Quoted values loop using `byte_at()` up to `len(val_trimmed)` (which counts codepoints). Multibyte characters cause premature termination ("unclosed quote") and `char_from_byte()` produces corrupted mojibake.
+  - **Remediation:** Refactored string scanning to iterate by Unicode code points `s[i]`. Added regression tests with Turkish and multibyte UTF-8 characters (`İstanbul`, `Türkçe`, `şemsiye`, `öğrenci`, `çözüm`).
+  - **Status:** Complete (Verified in `tests/env_parser_test.nox`)
 
 ---
 
-### [x] Sürüm v0.2.0 — Faz 1: Saf (Pure) & Bounded `.env` Ayrıştırıcı
-> **Hedef:** Hiçbir I/O yapmayan, doğrudan metin alan, güvenlik sınırlarına ve katı kurallara uyan `.env` parser'ı tamamlamak.
+## ⚙️ P1: Configuration Lifecycle & Correctness
 
-- [x] **1.1 Parser Çekirdeği (`env/parser.nox`)**
-  - [x] Token ve AST/Satır modellerini tanımla (`EnvEntry`, `EnvParseError`).
-  - [x] Değişken adı dilbilgisi denetimi (`^[A-Za-z_][A-Za-z0-9_]*$`).
-  - [x] `KEY=VALUE`, eşittir etrafındaki opsiyonel boşluklar, boş değerler (`KEY=`).
-  - [x] `export KEY=VALUE` sözdizimini tanı (işletim sistemine aktarmadan güvenle ayrıştır).
-  - [x] Tek tırnak (`'...'`) ve çift tırnak (`"..."`) desteği.
-  - [x] Kaçış dizileri (Escape sequences): `\n`, `\r`, `\t`, `\\`, `\"` (katı politika ile).
-  - [x] Yorum satırları (`#`) ve tırnak içi/satır içi yorum ayrımı.
-  - [x] UTF-8 BOM ve CRLF/LF normalizasyonu.
-- [x] **1.2 Güvenlik Sınırları & Korumalar**
-  - [x] Maksimum dosya boyutu sınırı (1 MiB).
-  - [x] Maksimum anahtar sayısı (2.000 anahtar).
-  - [x] Maksimum tekil değer boyutu (64 KiB).
-  - [x] Maksimum anahtar uzunluğu (128 bayt).
-  - [x] Çift anahtar (Duplicate key) katı hata politikası (`CONFIG_DUPLICATE_KEY`).
-  - [x] Hata mesajlarında asla sır değeri içermeme, sadece satır/sütun/anahtar adı bildirme.
-  - [x] `$(...)`, backtick veya kabuk komutlarını kesinlikle çalıştırmama (hata ver veya literal al).
-- [x] **1.3 Testler ve Fikstürler (`tests/env_parser_test.nox`)**
-  - [x] Pozitif sözdizimi testleri (`fixtures/dotenv/valid.env`).
-  - [x] Tırnak, escape ve yorum testleri (`fixtures/dotenv/quotes.env`).
-  - [x] Geçersiz anahtar, bozuk tırnak, NUL baytı testleri (`fixtures/dotenv/malformed.env`).
-  - [x] Çift anahtar çakışma testleri.
-  - [x] Aşırı boyutlu (size bomb) girdi testleri.
-  - [x] Regresyon senaryoları: `ENV-03`, `ENV-04`, `ENV-05`, `ENV-06`, `ENV-07`, `ENV-08`.
-  - [x] **Kabul Kapısı (Gate 1):** Tüm parser testleri `noxc test` ile yeşil olmalı, hiçbir ortam değişkeni mutasyona uğramamalıdır.
+- [x] **ORD-01: Schema Defaults Prior to Interpolation**
+  - **File:** `core/builder.nox`, `schema/validate.nox`
+  - **Issue:** `build()` runs interpolation *before* schema validation adds default values. `${DEFAULT_KEY}` references cannot resolve schema defaults.
+  - **Remediation:** Populated schema defaults into candidate entries *before* `resolve_interpolations()`.
+  - **Status:** Complete (Verified in `tests/interpolation_test.nox`)
+
+- [x] **VAL-01: Validation of Injected Schema Default Values**
+  - **File:** `schema/validate.nox`
+  - **Issue:** Default values are added to missing keys without running type, length, and range constraints on the default values themselves.
+  - **Remediation:** Run full constraint validation on default values during schema initialization/application.
+  - **Status:** Complete (Verified in `tests/schema_test.nox`)
+
+- [x] **ROB-01: Single-Pass Forward Scanning in Redaction**
+  - **File:** `secrets/redact.nox`
+  - **Issue:** If a sentinel matches part of `[REDACTED]`, repeated `index_of()` causes an infinite loop.
+  - **Remediation:** Implemented single-pass forward scanning that strictly advances past matches on remaining unredacted text.
+  - **Status:** Complete (Verified in `tests/redaction_test.nox`)
+
+- [x] **ROB-02: RFC 8259 Compliant JSON String Escaping**
+  - **File:** `secrets/redact.nox`
+  - **Issue:** Handwritten `escape_json_str()` does not escape all ASCII control characters (`\u0000`–`\u001f`).
+  - **Remediation:** Leveraged `nox.json.dump_string(s)` for complete RFC 8259 escaping of all control characters and strings.
+  - **Status:** Complete (Verified in `tests/redaction_test.nox`)
 
 ---
 
-### [x] Sürüm v0.2.5 — Faz 2: Çekirdek Anlık Görüntü (Snapshot), Kaynaklar & Deterministik Öncelik
-> **Hedef:** Çoklu kaynakları birleştiren, deterministik öncelik kurallarını işleten ve izlenebilirlik sağlayan çekirdeği kurmak.
+## 🚀 Release Engineering & CI Matrisi
 
-- [x] **2.1 Çekirdek Tipler ve Hatalar (`core/types.nox`, `core/errors.nox`)**
-  - [x] `ConfigValue`: `String`, `Integer`, `Float`, `Boolean`, `Array`, `Object`, `Null`, `Missing`.
-  - [x] `PresenceState`: `Missing`, `NullValue`, `EmptyString`, `SuppliedValue`.
-  - [x] `SourceOrigin`: Kaynak türü (`Defaults`, `Memory`, `File`, `Dotenv`, `Env`, `Override`), kaynak ID'si, profil.
-  - [x] `ConfigEntry`: Değer, varlık durumu, kaynak bilgisi, sır bayrağı (`is_secret`), öncelik sırası.
-  - [x] Güvenli hata tipleri ve standart kodlar (`CONFIG_MISSING`, `CONFIG_DUPLICATE_KEY`, vb.).
-- [x] **2.2 Kaynak Soyutlamaları (`sources/interface.nox`, `sources/memory.nox`)**
-  - [x] `ConfigSource` arayüzü/sözleşmesi.
-  - [x] `MemorySource`: Bellek içi test geçersiz kılmaları ve varsayılanlar.
-  - [x] `DotenvSource (`env/source.nox`): Dosya boyutu denetimli `.env` okuyucu.
-  - [x] `ProcessEnvSource` (`env/process.nox`): Yalnızca izin verilen/şemada kayıtlı anahtarları `nox.os.getenv` ile okur.
-- [x] **2.3 Öncelik ve Birleştirme Motoru (`core/merge.nox`, `core/snapshot.nox`)**
-  - [x] Standart öncelik sırası: Defaults -> Base File -> Profile File -> `.env` -> `.env.<profile>` -> Process Env -> Runtime Overrides.
-  - [x] Nesneler için derin/özyinelemeli (recursive) birleştirme, diziler için yer değiştirme (replace).
-  - [x] Tipler arası çakışmada açık hata verme (`CONFIG_TYPE_MISMATCH`).
-  - [x] `ConfigSnapshot`: Dışarıya değişmez (immutable) ve yalnızca okunabilir nesne sunumu.
-  - [x] Güvenli kaynak izleme: `snapshot.explain(key)` (asla sır değeri ifşa etmez).
-- [x] **2.4 Testler (`tests/merge_test.nox`, `tests/env_process_test.nox`)**
-  - [x] Çok kaynaklı öncelik doğrulama testleri (`MERGE-01`).
-  - [x] Üst kaynak geçersiz olduğunda alt kaynağa sessizce düşmeme testi (`MERGE-02`).
-  - [x] Nesne ve dizi birleştirme testleri (`MERGE-03`).
-  - [x] Missing/Null/Empty ayrım testleri (`MERGE-04`, `ENV-01`, `ENV-02`).
-  - [x] İzin verilmeyen ortam değişkenlerinin taranmaması testi.
-  - [x] **Kabul Kapısı (Gate 2):** Kaynak sıralaması deterministik olmalı, yayınlanan snapshot dondurulmuş (immutable) olmalıdır.
+- [x] **REL-01: Fix Release Pipeline Archive Generation**
+  - **File:** `.github/workflows/release.yml`
+  - **Issue:** `tar: .: file changed as we read it` occurred because archive was written inside the root directory being read.
+  - **Remediation:** Used `git archive --format=tar.gz --output="$RUNNER_TEMP/vault-${TAG}.tar.gz"` and write distribution archives to `${{ runner.temp }}`.
+  - **Status:** Complete
 
----
+- [x] **CI-01: Dual Backend Verification**
+  - **File:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+  - **Issue:** Ensure LLVM and QBE backends are explicitly tested in CI and documented.
+  - **Remediation:** Added explicit execution steps for both `noxc test --backend qbe` and `noxc test --backend llvm` on all 4 platform runners.
+  - **Status:** Complete
 
-### [x] Sürüm v0.3.0 — Faz 3: Tipli Şema (Typed Schema) & Toplu Doğrulama (**MVP DÖNÜM NOKTASI**)
-> **Hedef:** Kullanıcıların tipli alanlar tanımlamasını, kısıtları denetlemesini ve toplu, güvenli doğrulama raporları almasını sağlamak.
-
-- [x] **3.1 Şema Alan Tanımları (`schema/fields.nox`)**
-  - [x] `FieldType`: String, Int, Float, Bool, StringList, NestedObject.
-  - [x] Alan özellikleri: `required`, `nullable`, `non_blank`, `default_value`, `secret`.
-  - [x] Sayısal ve metinsel kısıtlar: `min`, `max`, `min_length`, `max_length`, `one_of`.
-  - [x] `ConfigSchema` yapısı ve akıcı/net alan ekleme API'si.
-- [x] **3.2 Katı Tip Dönüşümü ve Zorlama (`schema/coerce.nox`)**
-  - [x] Metinden (`.env`) tam sayıya katı çevrim ve taşma (overflow) denetimi.
-  - [x] Mantıksal (boolean) katı çevrim: `true`/`false` (büyük/küçük harf duyarsız).
-  - [x] Ondalıklı (float) katı çevrim (NaN ve Infinity reddi).
-  - [x] Liste çevrimi (dizi tipleri ve virgülle ayrılmış dizgeler).
-- [x] **3.3 Toplu Doğrulama Motoru (`schema/validate.nox`)**
-  - [x] İlk hatada durmayan, keşfedilebilir tüm hataları toplayan doğrulayıcı (`ValidationReport`).
-  - [x] Hata sıralamasının deterministik olması (kaynak sırası, anahtar, hata kodu).
-  - [x] Hatalarda değer içeriğinin gizlenmesi (`SafeConfigDiagnostic`).
-- [x] **3.4 Tipli Snapshot Getters (`core/snapshot.nox`)**
-  - [x] `get_string(key) -> str`
-  - [x] `get_int(key) -> int`
-  - [x] `get_float(key) -> float`
-  - [x] `get_bool(key) -> bool`
-  - [x] `get_list(key) -> list[str]`
-  - [x] `has(key) -> bool`, `is_null(key) -> bool`
-- [x] **3.5 Testler (`tests/schema_test.nox`, `tests/integration_test.nox`)**
-  - [x] Zorunlu alan ve varsayılan değer testleri.
-  - [x] Tip uyumsuzluğu ve aralık dışı testleri (`SCHEMA-02`, `SCHEMA-03`, `SCHEMA-04`).
-  - [x] Birden fazla hatanın toplu raporlanması testi (`SCHEMA-05`).
-  - [x] Üretim modunda eksik sır ayarının fail-closed kapanması (`SCHEMA-01`).
-  - [x] **Kabul Kapısı (Gate 3 - MVP Gate):** MVP tamamlanmalı, `tests/integration_test.nox` uçtan uca çalışmalıdır.
-
----
-
-### [x] Sürüm v0.4.0 — Faz 4: Yapılandırılmış Kaynaklar (JSON, TOML, YAML) & Güvenli Dosya Okuma
-> **Hedef:** NOX standart kütüphanesini kullanarak JSON, TOML ve YAML dosyalarını tip kaybı yaşamadan yüklemek ve kök dizin güvenliğini sağlamak.
-
-- [x] **4.1 Kök Dizin ve Dosya Güvenliği (`sources/files.nox`)**
-  - [x] `canonicalize` ile yol çözümleme.
-  - [x] Yol segmenti bazlı (path-segment aware) kök dizin (`allowed_root`) sınır denetimi.
-  - [x] Symlink kaçışı ve `../` dizin geçişi (directory traversal) engelleme (`FILE-01`, `FILE-02`, `FILE-03`).
-  - [x] Okuma öncesi dosya boyutu kontrolü (1 MiB sınırı) ve dosya varlık kontrolü (`FILE-04`, `FILE-05`).
-- [x] **4.2 Format Köprüleri (`sources/json.nox`, `sources/toml.nox`, `sources/yaml.nox`)**
-  - [x] `nox.json.parse` ile JSON -> `ConfigValue` dönüşümü (`json_source_test.nox`).
-  - [x] `nox.toml.parse` ile TOML 1.0 -> `ConfigValue` dönüşümü (`toml_source_test.nox`).
-  - [x] `nox.yaml.parse` ile YAML alt kümesi -> `ConfigValue` dönüşümü (`yaml_source_test.nox`).
-  - [x] Desteklenmeyen veya bozuk formatların güvenli raporlanması (`FORMAT-01`, `FORMAT-02`).
-- [x] **4.3 Testler (`tests/security_test.nox`, format testleri)**
-  - [x] Dizin dışına sızma girişimleri testi (`/app/config-evil` vs `/app/config`).
-  - [x] İçiçe geçmiş (nested) harita ve dizilerin tip korumalı aktarım testleri.
-  - [x] **Kabul Kapısı (Gate 4):** Biçim köprüleri NOX stdlib üzerinden çalışmalı ve kök dizin sınırları asla aşılamamalıdır.
-
----
-
-### [x] Sürüm v0.5.0 — Faz 5: Profiller, İnterpolasyon ve Sır Bulaşması (Taint)
-> **Hedef:** Çoklu ortam profillerini (`dev`, `test`, `prod`) katmanlamak, güvenli `${KEY}` referans çözümü ve sır yayılımını gerçekleştirmek.
-
-- [x] **5.1 Profil Yönetimi (`profiles/overlay.nox`)**
-  - [x] Açık profil seçimi (`development`, `test`, `staging`, `production`, özel adlar).
-  - [x] Profil tabanlı dosya ve `.env` katmanlama (`vault.<profile>.toml`, `.env.<profile>`).
-  - [x] Bilinmeyen profil için hata verme (`PROFILE-02`).
-  - [x] `production` modunda sıkı güvenlik kontrolleri (`PROFILE-01`).
-- [x] **5.2 Güvenli Değişken İnterpolasyonu (`interpolate/resolve.nox`)**
-  - [x] Birleştirme sonrasında `${KEY}` sözdizimi çözümü.
-  - [x] Döngü tespiti (Cycle detection) ve bağımlılık grafiği (`A -> B -> A`) (`INTERP-02`).
-  - [x] Çok adımlı çözüm (`A -> B -> C`) (`INTERP-01`).
-  - [x] Maksimum derinlik sınırı (16) ve maksimum genişleme boyutu (128 KiB) (`INTERP-03`).
-  - [x] Kabuk komutu, harici kod çalıştırma veya keyfi fonksiyon çağrısı yasağının korunması.
-- [x] **5.3 Sır Yayılımı (Secret Taint Propagation)**
-  - [x] İnterpolasyonda sır içeren bir anahtar kullanıldığında hedef anahtarın da otomatik `secret=true` olması (`INTERP-04`).
-- [x] **5.4 Testler (`tests/profiles_test.nox`, `tests/interpolation_test.nox`)**
-  - [x] Zincirleme referans ve döngü testleri.
-  - [x] Genişleme bombası (expansion bomb) koruma testleri.
-  - [x] Sır lekeleme (taint) testleri.
-  - [x] **Kabul Kapısı (Gate 5):** İnterpolasyon deterministik olmalı, döngüler güvenle yakalanmalı ve sırlar lekelenerek korunmalıdır. (LLVM ve QBE onaylı)
-
----
-
-### [x] Sürüm v0.6.0 — Faz 6: Sır Sınıflandırması, Maskeleme & Güvenli İnceleme (**PRATİK PAKET DÖNÜM NOKTASI**)
-> **Hedef:** Sırların hafızada, loglarda, snapshot'larda ve hata çıktılarında asla açığa çıkmamasını garanti etmek.
-
-- [x] **6.1 Sır Modeli ve API (`secrets/mark.nox`, `secrets/reveal.nox`)**
-  - [x] `SecretValue` sarmalayıcısı (varsayılan metinsel temsili `[REDACTED]`).
-  - [x] Bilinçli ve yetkili sır okuma metodu: `snapshot.get_secret(key) -> str` (`SECRET-03`).
-  - [x] Güvenli açıklama metodu: `snapshot.explain(key)` ve `snapshot.describe(key)` (yalnızca kaynak türü, profil ve durum).
-- [x] **6.2 Yapılandırılmış Maskeleme (`secrets/redact.nox`)**
-  - [x] `snapshot.redacted_json() -> str` üretimi (`SECRET-02`).
-  - [x] `redact_string(text, sentinels)` savunma derinliği metin maskelemesi (`SECRET-01`).
-  - [x] Sır önbelleği (`secrets/cache.nox`) (TTL destekli, opt-in).
-- [x] **6.3 Tehdit Modeli ve Redaksiyon Testleri (`tests/redaction_test.nox`)**
-  - [x] `VAULT_TEST_SECRET_DO_NOT_PRINT` sentineliyle tüm çıktıların (stdout, stderr, loglar, hatalar, explain, json) taranması (`SECRET-01`, `CI-03`).
-  - [x] Üretimde varsayılan parola kullanımının engellenmesi.
-  - [x] **Kabul Kapısı (Gate 6 - Practical Package Gate):** Sentinel hiçbir raporda yer almamalı, yetkili get_secret doğru değeri vermelidir. (LLVM ve QBE onaylı)
-
----
-
-### [x] Sürüm v0.7.0 — Faz 7: Yerel Sır Sağlayıcıları (Secret Providers)
-> **Hedef:** Harici sır depoları için eklenebilir arayüz ve yerel sağlayıcı adaptörlerini sunmak.
-
-- [x] **7.1 Sağlayıcı Sözleşmesi (`providers/interface.nox`)**
-  - [x] `SecretProvider` arayüzü (`id`, `get(key)`, `health()`, `close()`).
-  - [x] `SecretFetchResult` yapısı.
-- [x] **7.2 Yerel Sağlayıcılar (`providers/env.nox`, `providers/file.nox`, `providers/memory.nox`, `providers/source.nox`)**
-  - [x] `EnvSecretProvider`: Açıkça izin verilen ortam anahtarları.
-  - [x] `FileSecretProvider`: Sınırlandırılmış, kök dizin korumalı sır dosyaları okuyucusu.
-  - [x] `MemorySecretProvider`: Test amaçlı sahte sağlayıcı.
-  - [x] `SecretProviderSource`: Sağlayıcıların konfigürasyon öncelik sırasına (rank 7) bağlanması.
-- [x] **7.3 Hata Davranışları (`PROVIDER-01`, `PROVIDER-03`)**
-  - [x] Sağlayıcıya erişilemediğinde fail-closed davranışı (`CONFIG_PROVIDER_UNAVAILABLE`).
-  - [x] İzin verilmeyen ağ çağrısı yapılmaması (`PROVIDER-01`).
-- [x] **7.4 Testler (`tests/secret_provider_test.nox`)**
-  - [x] Yerel dosya, env ve memory sır sağlayıcı testleri.
-  - [x] **Kabul Kapısı (Gate 7):** Sır sağlayıcıları izole ve yapılandırılabilir olmalıdır. (LLVM ve QBE onaylı)
-
----
-
-### [x] Sürüm v0.8.0 — Faz 8: Doğrulanmış Yeniden Yükleme (Atomic Reload) & Son Bilinen İyi Durum
-> **Hedef:** Çalışma anında konfigürasyon yenilenirken sistemin kesintiye uğramamasını ve hatalı konfigürasyonda eski duruma dönülmesini sağlamak.
-
-- [x] **8.1 Reload Yöneticisi (`reload/manager.nox`)**
-  - [x] Aday (candidate) snapshot oluşturma ve tam doğrulama adımı.
-  - [x] Doğrulama başarısız olursa: Eski snapshot'ı aynen koru, hata raporu dön (`RELOAD-01`).
-  - [x] Doğrulama başarılı olursa: Yeni versiyonlanmış snapshot'ı yayınla (`RELOAD-02`).
-  - [x] Eşzamanlı okuyucular için tutarlılık ve yarım kalmış durum (partial state) engeli.
-- [x] **8.2 Testler (`tests/reload_test.nox`)**
-  - [x] Geçersiz güncelleme sonrası geri alma (rollback) testi.
-  - [x] Başarılı versiyon artışı testi.
-  - [x] **Kabul Kapısı (Gate 8):** Snapshot takası atomik olmalı, yarım kalmış veya geçersiz konfigürasyon asla yayınlanmamalıdır. (LLVM ve QBE onaylı)
-
----
-
-### [x] Sürüm v0.9.0 — Faz 9: Opsiyonel Uzak Sır Sağlayıcı Çerçevesi (Remote Providers)
-> **Hedef:** Ağ üzerinden çalışan uzak sır sağlayıcıları için güvenli, HTTPS zorunlu, SSRF korumalı altyapı sağlamak.
-
-- [x] **9.1 Uzak Sağlayıcı Modeli (`providers/remote_http.nox`)**
-  - [x] Yalnızca HTTPS ve açıkça izin verilen alan adı/port (allowlist).
-  - [x] Yeniden yönlendirme (redirect) engelleme ve SSRF savunması (`PROVIDER-02`).
-  - [x] Bounded timeout, sınırlı tekrar deneme (retry) ve arka plana çekilme (backoff).
-  - [x] Ağ çağrılarında veya hatalarda token sızdırmazlığı.
-- [x] **9.2 Testler (Mock Taşıyıcı ile)**
-  - [x] Ağ istekleri yapılmayan hermetik test koşusu (`PROVIDER-01`).
-  - [x] Timeout ve yetkilendirme hatası testleri.
-  - [x] **Kabul Kapısı (Gate 9):** Uzak sağlayıcılar varsayılan suite'te ağ çağrısı yapmamalı, tüm güvenlik sınırlarına uymalıdır. (LLVM ve QBE onaylı)
-
----
-
-### [x] Sürüm v0.9.5 — Faz 10: Opsiyonel CLI Aracı (`cli/main.nox`)
-> **Hedef:** Geliştiriciler ve CI ortamları için komut satırı arayüzü sunmak.
-
-- [x] **10.1 CLI Komutları**
-  - [x] `vault validate --config <yol> --profile <ad>` (`CLI-01`).
-  - [x] `vault explain <anahtar> --config <yol>`.
-  - [x] `vault check-env --schema <yol>`.
-  - [x] `vault version` ve `vault --help` (`CLI-02`).
-- [x] **10.2 CLI Güvenliği**
-  - [x] Yardım komutu (`--help`) sır yüklememeli veya ağ açmamalıdır.
-  - [x] Başarısız doğrulamada sıfır olmayan (nonzero) çıkış kodu dönmelidir.
-  - [x] Standart çıktı/hata akışına sır değerleri asla basılmamalıdır.
-- [x] **10.3 Testler**
-  - [x] Komut satırı argümanları ve çıkış kodları testi.
-  - [x] **Kabul Kapısı (Gate 10):** CLI komutları sır sızdırmadan çalışmalı ve CI otomasyonuna uygun olmalıdır. (LLVM ve QBE onaylı)
-
----
-
-### [x] Sürüm v0.9.8 — Faz 11: Ekosistem Adaptörleri (Ecosystem Adapters)
-> **Hedef:** NOX ekosistemindeki kütüphaneler (Aether, Nyx vb.) için çekirdeği kirletmeyen ince adaptörler sağlamak.
-
-- [x] **11.1 Adaptör Modülleri (`adapters/`)**
-  - [x] `adapters/aether.nox` (HTTP sunucu ayarları).
-  - [x] `adapters/nyx.nox` (Web servis ayarları).
-  - [x] `adapters/feather.nox` (Veritabanı bağlantı ayarları - parola ifşasız).
-  - [x] `adapters/noxen.nox` (Worker servis ayarları).
-  - [x] `adapters/nova.nox` (Async mesajlaşma ayarları).
-- [x] **11.2 Bağımsızlık İlkesi**
-  - [x] Adaptörlerin varlığı veya yokluğu `import vault` işlemini bozmamalıdır.
-- [x] **11.3 Kabul Kapısı (Gate 11):** Adaptörler opsiyonel olmalı, çekirdeğe bağımlılık taşımamalıdır. (LLVM ve QBE onaylı)
-
----
-
-### [x] Sürüm v1.0.0 — Faz 12: v1.0 Sertleştirme, Tam Regresyon ve Yayınlama
-> **Hedef:** Tüm güvenlik, platform ve regresyon testlerini tamamlayarak prodüksiyon kalitesinde v1.0.0 sürümünü mühürlemek.
-
-- [x] **12.1 Tam Regresyon Senaryo Matrisi Doğrulaması**
-  - [x] `ENV-01` .. `ENV-08` (Ortam ve .env senaryoları)
-  - [x] `MERGE-01` .. `MERGE-05` (Öncelik ve birleştirme)
-  - [x] `SCHEMA-01` .. `SCHEMA-05` (Tipli şema ve sınırlar)
-  - [x] `INTERP-01` .. `INTERP-04` (İnterpolasyon ve döngü tespiti)
-  - [x] `SECRET-01` .. `SECRET-04` (Sır maskeleme ve sentineller)
-  - [x] `FILE-01` .. `FILE-05` (Kök dizin ve dosya sınırları)
-  - [x] `FORMAT-01` .. `FORMAT-02` (JSON, TOML, YAML doğruluk)
-  - [x] `PROFILE-01` .. `PROFILE-02` (Profil kontrolleri)
-  - [x] `PROVIDER-01` .. `PROVIDER-04` (Sağlayıcı sınırları)
-  - [x] `RELOAD-01` .. `RELOAD-02` (Yeniden yükleme atomikliği)
-  - [x] `CLI-01` .. `CLI-02` (CLI hata kodları ve güvenlik)
-  - [x] `CI-01` .. `CI-04` (Platform matrisi, backend uyumu ve sır taraması)
-- [x] **12.2 Belgeler ve Örnekler**
-  - [x] `docs/api.md`, `docs/recipes.md`, `docs/security.md`.
-  - [x] `examples/basic_env.nox`, `examples/typed_config.nox`, `examples/secrets.nox`.
-- [x] **12.3 Kod İnceleme ve Güvenlik Denetimi**
-  - [x] Bölüm 20'deki kod inceleme kontrol listesinin (Code Review Checklist) tamamına "EVET".
-  - [x] `noxc check vault.nox` ve `noxc test` tam yeşil raporu (19/19 test LLVM ve QBE onaylı).
-- [x] **Kabul Kapısı (Gate 12 - v1.0 Release Gate):** Tüm aşamalar eksiksiz, sızıntısız ve kararlı olmalıdır. (LLVM ve QBE onaylı)
-
----
-
-## 🔒 Güvenlik & Ajan Uygulama Döngüsü Kuralları
-
-Her görev tamamlandığında aşağıdaki standart rapor formatı kullanılacaktır:
-
-```text
-IMPLEMENTED:
-- Yapılan değişiklikler, eklenen dosyalar ve fonksiyonlar.
-
-VERIFIED:
-- Çalıştırılan derleyici komutu (örn: noxc check vault.nox, noxc test) ve çıktıları.
-- Pozitif ve negatif test sonuçları.
-
-SECURITY:
-- Sır maskeleme, dizin sınırları, ağ kısıtlamaları denetimleri.
-
-NOT VERIFIED / KNOWN RISKS:
-- Henüz test edilmemiş veya desteklenmeyen alanlar.
-
-NEXT STEP:
-- Sıradaki görev ve kabul kriteri.
-```
+- [x] **VER-01: Bump Version to v1.0.1**
+  - **Files:** `nox.json`, `vault.nox`, `CHANGELOG.md`, `README.md`, `cli/main.nox`
+  - **Remediation:** Updated version to 1.0.1 across all documentation, metadata, test suites, and release notes.
+  - **Status:** Complete

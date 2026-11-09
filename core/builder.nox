@@ -13,7 +13,7 @@ from sources.yaml import YamlSource
 from env.source import DotenvSource
 from env.process import ProcessEnvSource
 from schema.fields import ConfigSchema, Field
-from schema.validate import validate_entries, ValidationReport, SafeConfigDiagnostic
+from schema.validate import validate_entries, ValidationReport, SafeConfigDiagnostic, populate_schema_defaults
 from profiles.overlay import validate_profile_name, is_production_profile, profile_filename
 from interpolate.resolve import resolve_interpolations
 from providers.interface import SecretProvider
@@ -112,13 +112,13 @@ class ConfigBuilder:
         return self
 
     def with_dotenv(self: ConfigBuilder, path: str, optional: bool) -> ConfigBuilder:
-        ds: DotenvSource = DotenvSource(path, optional, 5, "base")
+        ds: DotenvSource = DotenvSource(path, self.allowed_root, optional, 5, "base")
         self.sources.append(ds)
         return self
 
     def with_profile_dotenv(self: ConfigBuilder, base_path: str, optional: bool) -> ConfigBuilder:
         p_path: str = profile_filename(base_path, self.profile)
-        ds: DotenvSource = DotenvSource(p_path, optional, 6, self.profile)
+        ds: DotenvSource = DotenvSource(p_path, self.allowed_root, optional, 6, self.profile)
         self.sources.append(ds)
         return self
 
@@ -150,22 +150,15 @@ class ConfigBuilder:
         # Step 1: Merge sources deterministically
         merged: dict[str, ConfigEntry] = merge_sources(self.sources)
 
-        # Step 2: Mark schema-declared secrets before interpolation for taint propagation
+        # Step 2: Populate schema defaults and mark declared secrets before interpolation (ORD-01)
         schema_opt: ConfigSchema | None = self.schema
         if schema_opt is not None:
-            field_keys: list[str] = schema_opt.keys()
-            f_idx: int = 0
-            while f_idx < len(field_keys):
-                fk: str = field_keys[f_idx]
-                fld: Field = schema_opt.get_field(fk)
-                if fld.secret and fk in merged:
-                    merged[fk].is_secret = True
-                f_idx = f_idx + 1
+            populate_schema_defaults(merged, schema_opt)
 
         # Step 3: Resolve interpolations (with cycle detection, depth limits, and taint propagation)
         resolved: dict[str, ConfigEntry] = resolve_interpolations(merged)
 
-        # Step 4: Validate against schema
+        # Step 4: Validate against schema (validates all values, including defaults and constraints) (VAL-01)
         if schema_opt is not None:
             report: ValidationReport = validate_entries(resolved, schema_opt, self.is_production)
             if not report.is_valid:

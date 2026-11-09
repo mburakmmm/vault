@@ -4,6 +4,7 @@
 from core.types import ConfigEntry, ConfigValue, SourceOrigin, PRESENCE_SUPPLIED, make_string
 from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_INTERPOLATION_CYCLE, ERR_CONFIG_SIZE_LIMIT, ERR_CONFIG_PARSE_ERROR
 from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
 from interpolate.resolve import resolve_interpolations, extract_template_references, substitute_template
 from schema.fields import ConfigSchema
 
@@ -175,6 +176,21 @@ def test_missing_reference_error() -> None:
     assert caught
     print("PASS: test_missing_reference_error")
 
+def test_schema_default_interpolation() -> None:
+    # A schema-declared default value can be referenced in an interpolated string
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("HOST", True, True, "db.internal.net", False, True)
+    schema.add_int("PORT", True, True, 5432, True, 1024, True, 65535, False)
+    schema.add_string("CONNECTION_STRING", True, False, "", False, True)
+
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_override("CONNECTION_STRING", "postgres://${HOST}:${PORT}/main")
+
+    snap: ConfigSnapshot = builder.build()
+    assert snap.get_string("CONNECTION_STRING") == "postgres://db.internal.net:5432/main"
+    print("PASS: test_schema_default_interpolation")
+
 # Run all test functions
 test_interp_01_multihop_chain()
 test_interp_02_direct_cycle()
@@ -184,4 +200,5 @@ test_interp_03_expansion_size_limit()
 test_interp_04_secret_taint_propagation()
 test_escaping_and_fallbacks()
 test_missing_reference_error()
+test_schema_default_interpolation()
 print("ALL INTERPOLATION TESTS PASSED SUCCESSFULLY!")

@@ -4,6 +4,8 @@
 from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_SIZE_LIMIT
 from providers.interface import SecretProvider, SecretFetchResult, ProviderHealth, make_fetch_success, make_fetch_not_found, make_fetch_error
 import nox.strings
+import nox.http
+from nox.http import HttpError
 
 MAX_REMOTE_RESPONSE_SIZE: int = 65536 # 64 KiB ceiling
 
@@ -30,6 +32,27 @@ class HttpTransport:
     def send_request(self: HttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int) -> HttpResponse:
         empty_h: dict[str, str] = {}
         return HttpResponse(500, empty_h, "base transport unimplemented", False, "")
+
+class StandardHttpTransport(HttpTransport):
+    def __init__(self: StandardHttpTransport) -> None:
+        self.transport_name = "standard_nox_http"
+
+    def send_request(self: StandardHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int) -> HttpResponse:
+        try:
+            res: nox.http.HttpResponse = nox.http.request(method, url, body, headers, timeout_ms)
+            is_redir: bool = res.status == 301 or res.status == 302 or res.status == 307 or res.status == 308
+            redir_loc: str = ""
+            if is_redir:
+                if "Location" in res.headers:
+                    redir_loc = res.headers["Location"]
+                elif "location" in res.headers:
+                    redir_loc = res.headers["location"]
+
+            return HttpResponse(res.status, res.headers, res.body, is_redir, redir_loc)
+        except HttpError as err:
+            raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "http network or timeout error")
+        except Exception:
+            raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "unexpected http transport error")
 
 class MockHttpTransport(HttpTransport):
     routes: dict[str, HttpResponse]
@@ -63,33 +86,57 @@ class MockHttpTransport(HttpTransport):
         empty_h: dict[str, str] = {}
         return HttpResponse(404, empty_h, "route not found", False, "")
 
-def _extract_host_port(https_url: str) -> str:
+def _extract_authority(https_url: str) -> str:
     # URL is verified to start with https:// (len 8)
     without_scheme: str = https_url[8:len(https_url)]
-    slash_idx: int = nox.strings.index_of(without_scheme, "/")
-    if slash_idx >= 0:
-        return without_scheme[0:slash_idx]
-    return without_scheme
+    # Stop at '/', '?', or '#'
+    end_idx: int = len(without_scheme)
+    s_idx: int = nox.strings.index_of(without_scheme, "/")
+    if s_idx >= 0 and s_idx < end_idx:
+        end_idx = s_idx
+    q_idx: int = nox.strings.index_of(without_scheme, "?")
+    if q_idx >= 0 and q_idx < end_idx:
+        end_idx = q_idx
+    h_idx: int = nox.strings.index_of(without_scheme, "#")
+    if h_idx >= 0 and h_idx < end_idx:
+        end_idx = h_idx
+
+    return without_scheme[0:end_idx]
 
 def validate_https_endpoint(url: str, allowlist: list[str]) -> bool:
     # 1. Scheme check: HTTPS only
     if not nox.strings.starts_with(url, "https://"):
         return False
 
-    host_port: str = _extract_host_port(url)
+    authority: str = _extract_authority(url)
 
-    # 2. SSRF check: Rejection of AWS/GCP/Azure link-local metadata and standard dangerous hosts
-    if nox.strings.starts_with(host_port, "169.254."):
-        return False
-    if host_port == "0.0.0.0" or host_port == "255.255.255.255":
+    # 2. Strict Userinfo / Credential Rejection (RFC 3986 & SSRF protection)
+    # Reject '@' in authority to prevent userinfo spoofing (e.g. https://allowed.com:pass@evil.com/)
+    if nox.strings.contains(authority, "@"):
         return False
 
-    # 3. Allowlist membership check
+    # 3. Parse host and optional port
+    host: str = authority
+    port: str = ""
+    colon_idx: int = nox.strings.index_of(authority, ":")
+    if colon_idx >= 0:
+        host = authority[0:colon_idx]
+        port = authority[colon_idx + 1:len(authority)]
+
+    # 4. SSRF check: Rejection of AWS/GCP/Azure link-local metadata and standard dangerous hosts
+    if nox.strings.starts_with(host, "169.254."):
+        return False
+    if host == "0.0.0.0" or host == "255.255.255.255":
+        return False
+    if host == "127.0.0.1" or host == "localhost":
+        return False
+
+    # 5. Allowlist membership check (exact host or exact authority match)
     matched: bool = False
     idx: int = 0
     while idx < len(allowlist):
         allowed: str = allowlist[idx]
-        if host_port == allowed or nox.strings.starts_with(host_port, allowed + ":"):
+        if host == allowed or authority == allowed:
             matched = True
         idx = idx + 1
 
@@ -104,7 +151,7 @@ class RemoteHttpSecretProvider(SecretProvider):
     max_retries: int
     transport: HttpTransport
 
-    def __init__(self: RemoteHttpSecretProvider, id: str, base_url: str, allowed_hosts: list[str], auth_header_name: str, auth_token: str, transport: HttpTransport) -> None:
+    def __init__(self: RemoteHttpSecretProvider, id: str, base_url: str, allowed_hosts: list[str], auth_header_name: str, auth_token: str, transport: HttpTransport | None) -> None:
         self.id = id
         self.provider_kind = "remote_http"
         self.base_url = base_url
@@ -113,7 +160,11 @@ class RemoteHttpSecretProvider(SecretProvider):
         self.auth_token = auth_token
         self.timeout_ms = 5000
         self.max_retries = 3
-        self.transport = transport
+
+        if transport is not None:
+            self.transport = transport
+        else:
+            self.transport = StandardHttpTransport()
 
         # Initial SSRF / allowlist check
         if not validate_https_endpoint(base_url, allowed_hosts):

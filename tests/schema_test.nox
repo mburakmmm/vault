@@ -128,4 +128,18 @@ assert_eq_str(report_multi.diagnostics[1].code, ERR_CONFIG_TYPE_MISMATCH, "diag 
 assert_eq_str(report_multi.diagnostics[2].key, "C_REQUIRED", "diag 2 key")
 assert_eq_str(report_multi.diagnostics[2].code, ERR_CONFIG_MISSING, "diag 2 code")
 
+# -------------------------------------------------------------------------
+# Test 5: Injected Default Value Constraint Validation (VAL-01)
+# -------------------------------------------------------------------------
+schema_bad_default: ConfigSchema = ConfigSchema()
+# Integer field with range [1000..9999] but default is 80 (below min)
+schema_bad_default.add_int("SERVICE_PORT", True, True, 80, True, 1000, True, 9999, False)
+
+empty_entries: dict[str, ConfigEntry] = {}
+report_bad_def: ValidationReport = validate_entries(empty_entries, schema_bad_default, False)
+assert_true(not report_bad_def.is_valid, "invalid schema default must fail validation")
+assert_eq_int(len(report_bad_def.diagnostics), 1, "1 diagnostic for bad default")
+assert_eq_str(report_bad_def.diagnostics[0].key, "SERVICE_PORT", "bad default key")
+assert_eq_str(report_bad_def.diagnostics[0].code, ERR_CONFIG_OUT_OF_RANGE, "bad default code out of range")
+
 print("SCHEMA_TEST: ALL PASS")

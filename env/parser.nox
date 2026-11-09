@@ -38,9 +38,6 @@ class EnvEntry:
         self.line = line
         self.is_quoted = is_quoted
 
-def _is_whitespace(b: int) -> bool:
-    return b == 32 or b == 9
-
 def _is_valid_key_start(b: int) -> bool:
     # A-Z (65-90), a-z (97-122), _ (95)
     if b >= 65 and b <= 90:
@@ -119,7 +116,7 @@ def parse_dotenv(text: str) -> list[EnvEntry]:
         # Skip empty lines and full-line comments
         if len(trimmed_line) == 0:
             line_idx = line_idx + 1
-        elif nox.strings.byte_at(trimmed_line, 0) == 35: # '#'
+        elif trimmed_line[0] == "#":
             line_idx = line_idx + 1
         else:
             # Handle optional 'export ' prefix
@@ -127,8 +124,15 @@ def parse_dotenv(text: str) -> list[EnvEntry]:
             if nox.strings.starts_with(content, "export ") or nox.strings.starts_with(content, "export\t"):
                 content = nox.strings.trim(content[6:len(content)])
 
-            # Find equals sign delimiter '=' (byte 61)
-            eq_idx: int = nox.strings.index_of(content, "=")
+            # Find equals sign delimiter '=' by codepoint index
+            eq_idx: int = -1
+            c_i: int = 0
+            while c_i < len(content):
+                if content[c_i] == "=":
+                    eq_idx = c_i
+                    break
+                c_i = c_i + 1
+
             if eq_idx < 0:
                 raise EnvParseError("CONFIG_PARSE_ERROR", line_num, 1, "", "missing '=' delimiter in assignment")
 
@@ -151,18 +155,18 @@ def parse_dotenv(text: str) -> list[EnvEntry]:
             if len(val_trimmed) == 0:
                 # Explicit empty value
                 val_res = ""
-            elif nox.strings.byte_at(val_trimmed, 0) == 39: # Single quote "'"
+            elif val_trimmed[0] == "'": # Single quote "'"
                 is_quoted = True
                 val_len: int = len(val_trimmed)
                 curr_idx: int = 1
                 closed: bool = False
                 val_buf: str = ""
                 while curr_idx < val_len and not closed:
-                    b: int = nox.strings.byte_at(val_trimmed, curr_idx)
-                    if b == 39: # Closing single quote
+                    ch: str = val_trimmed[curr_idx]
+                    if ch == "'": # Closing single quote
                         closed = True
                     else:
-                        val_buf = val_buf + nox.strings.char_from_byte(b)
+                        val_buf = val_buf + ch
                     curr_idx = curr_idx + 1
                 
                 if not closed:
@@ -171,40 +175,40 @@ def parse_dotenv(text: str) -> list[EnvEntry]:
                 # Check trailing characters after closing quote
                 trailing: str = nox.strings.trim(val_trimmed[curr_idx:val_len])
                 if len(trailing) > 0:
-                    if nox.strings.byte_at(trailing, 0) != 35: # '#'
+                    if trailing[0] != "#":
                         raise EnvParseError("CONFIG_PARSE_ERROR", line_num, curr_idx + 1, raw_key, "unexpected trailing characters after single-quoted value")
                 val_res = val_buf
 
-            elif nox.strings.byte_at(val_trimmed, 0) == 34: # Double quote '"'
+            elif val_trimmed[0] == "\"": # Double quote '"'
                 is_quoted = True
                 val_len: int = len(val_trimmed)
                 curr_idx: int = 1
                 closed: bool = False
                 val_buf: str = ""
                 while curr_idx < val_len and not closed:
-                    b: int = nox.strings.byte_at(val_trimmed, curr_idx)
-                    if b == 92: # Backslash '\' escape
+                    ch: str = val_trimmed[curr_idx]
+                    if ch == "\\": # Backslash '\' escape
                         if curr_idx + 1 >= val_len:
                             raise EnvParseError("CONFIG_PARSE_ERROR", line_num, curr_idx + 1, raw_key, "unclosed escape sequence at end of line")
-                        esc_b: int = nox.strings.byte_at(val_trimmed, curr_idx + 1)
-                        if esc_b == 110: # \n
+                        esc_ch: str = val_trimmed[curr_idx + 1]
+                        if esc_ch == "n":
                             val_buf = val_buf + "\n"
-                        elif esc_b == 116: # \t
+                        elif esc_ch == "t":
                             val_buf = val_buf + "\t"
-                        elif esc_b == 114: # \r
-                            val_buf = val_buf + nox.strings.char_from_byte(13)
-                        elif esc_b == 92: # \\
+                        elif esc_ch == "r":
+                            val_buf = val_buf + "\r"
+                        elif esc_ch == "\\":
                             val_buf = val_buf + "\\"
-                        elif esc_b == 34: # \"
+                        elif esc_ch == "\"":
                             val_buf = val_buf + "\""
                         else:
                             raise EnvParseError("CONFIG_PARSE_ERROR", line_num, curr_idx + 1, raw_key, "unsupported escape sequence")
                         curr_idx = curr_idx + 2
-                    elif b == 34: # Closing double quote
+                    elif ch == "\"": # Closing double quote
                         closed = True
                         curr_idx = curr_idx + 1
                     else:
-                        val_buf = val_buf + nox.strings.char_from_byte(b)
+                        val_buf = val_buf + ch
                         curr_idx = curr_idx + 1
                 
                 if not closed:
@@ -213,7 +217,7 @@ def parse_dotenv(text: str) -> list[EnvEntry]:
                 # Check trailing characters after closing quote
                 trailing: str = nox.strings.trim(val_trimmed[curr_idx:val_len])
                 if len(trailing) > 0:
-                    if nox.strings.byte_at(trailing, 0) != 35: # '#'
+                    if trailing[0] != "#":
                         raise EnvParseError("CONFIG_PARSE_ERROR", line_num, curr_idx + 1, raw_key, "unexpected trailing characters after double-quoted value")
                 val_res = val_buf
 
@@ -225,14 +229,14 @@ def parse_dotenv(text: str) -> list[EnvEntry]:
                 comment_found: bool = False
 
                 while curr_idx < val_len and not comment_found:
-                    b: int = nox.strings.byte_at(val_trimmed, curr_idx)
-                    if b == 35: # '#'
+                    ch: str = val_trimmed[curr_idx]
+                    if ch == "#":
                         if curr_idx == 0:
                             end_pos = 0
                             comment_found = True
                         else:
-                            prev_b: int = nox.strings.byte_at(val_trimmed, curr_idx - 1)
-                            if _is_whitespace(prev_b):
+                            prev_ch: str = val_trimmed[curr_idx - 1]
+                            if prev_ch == " " or prev_ch == "\t":
                                 end_pos = curr_idx - 1
                                 comment_found = True
                     curr_idx = curr_idx + 1

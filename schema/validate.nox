@@ -66,7 +66,6 @@ def _sort_diagnostics(diags: list[SafeConfigDiagnostic]) -> list[SafeConfigDiagn
     while i < n:
         j: int = 0
         while j < n - i - 1:
-            # Sort by key, then by code
             swap: bool = False
             if result[j].key > result[j + 1].key:
                 swap = True
@@ -82,7 +81,26 @@ def _sort_diagnostics(diags: list[SafeConfigDiagnostic]) -> list[SafeConfigDiagn
 
     return result
 
+def populate_schema_defaults(entries: dict[str, ConfigEntry], schema: ConfigSchema) -> None:
+    field_keys: list[str] = schema.keys()
+    idx: int = 0
+    while idx < len(field_keys):
+        k: str = field_keys[idx]
+        f: Field = schema.get_field(k)
+        if k not in entries:
+            if f.has_default:
+                origin: SourceOrigin = SourceOrigin("schema_default", "defaults", "base", 1)
+                default_entry: ConfigEntry = ConfigEntry(k, f.default_val, PRESENCE_SUPPLIED, origin, f.secret, True)
+                entries[k] = default_entry
+        else:
+            if f.secret:
+                entries[k].is_secret = True
+        idx = idx + 1
+
 def validate_entries(entries: dict[str, ConfigEntry], schema: ConfigSchema, is_production: bool) -> ValidationReport:
+    # 1. Ensure any missing schema defaults are injected first
+    populate_schema_defaults(entries, schema)
+
     diags: list[SafeConfigDiagnostic] = []
     field_keys: list[str] = schema.keys()
 
@@ -93,22 +111,10 @@ def validate_entries(entries: dict[str, ConfigEntry], schema: ConfigSchema, is_p
         t_name: str = _type_name(f.field_type)
 
         if k not in entries:
-            # Field absent in merged sources
-            if f.has_default:
-                # Apply default value
-                origin: SourceOrigin = SourceOrigin("schema_default", "defaults", "base", 1)
-                default_entry: ConfigEntry = ConfigEntry(k, f.default_val, PRESENCE_SUPPLIED, origin, f.secret, True)
-                entries[k] = default_entry
-
-                # Strict production check: secrets cannot use hardcoded defaults
-                if is_production and f.secret:
-                    diags.append(SafeConfigDiagnostic(ERR_CONFIG_SECRET_SOURCE_DENIED, k, t_name, "production_secret_default", "secret cannot use default value in production"))
-            elif f.required:
+            if f.required:
                 diags.append(SafeConfigDiagnostic(ERR_CONFIG_MISSING, k, t_name, "required", "required configuration setting is missing"))
         else:
             e: ConfigEntry = entries[k]
-
-            # Mark secret if declared in schema
             if f.secret:
                 e.is_secret = True
 
@@ -120,14 +126,13 @@ def validate_entries(entries: dict[str, ConfigEntry], schema: ConfigSchema, is_p
                 if f.non_blank:
                     diags.append(SafeConfigDiagnostic(ERR_CONFIG_EMPTY_NOT_ALLOWED, k, t_name, "non_blank", "empty value is not allowed"))
                 else:
-                    # Coerce empty value
                     cr: CoerceResult = coerce_value(e.val, f.field_type)
                     if cr.success:
                         e.val = cr.val
                     else:
                         diags.append(SafeConfigDiagnostic(cr.err_code, k, t_name, "type_coercion", cr.err_msg))
             else:
-                # Value supplied: Coerce and check bounds
+                # Value supplied (from source or default): Coerce and check bounds
                 cr: CoerceResult = coerce_value(e.val, f.field_type)
                 if not cr.success:
                     diags.append(SafeConfigDiagnostic(cr.err_code, k, t_name, "type_coercion", cr.err_msg))
@@ -146,9 +151,9 @@ def validate_entries(entries: dict[str, ConfigEntry], schema: ConfigSchema, is_p
                         if f.non_blank and len(nox.strings.trim(cr.val.s)) == 0:
                             diags.append(SafeConfigDiagnostic(ERR_CONFIG_EMPTY_NOT_ALLOWED, k, t_name, "non_blank", "whitespace-only value not allowed"))
 
-            # Production mode secret origin check
+            # Strict production check: secrets cannot use hardcoded defaults
             if is_production and f.secret and e.is_default:
-                diags.append(SafeConfigDiagnostic(ERR_CONFIG_SECRET_SOURCE_DENIED, k, t_name, "production_secret_default", "secret cannot use default source in production"))
+                diags.append(SafeConfigDiagnostic(ERR_CONFIG_SECRET_SOURCE_DENIED, k, t_name, "production_secret_default", "secret cannot use default value in production"))
 
         idx = idx + 1
 

@@ -6,7 +6,7 @@
 [![CI](https://github.com/mburakmmm/vault/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/vault/actions/workflows/ci.yml)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20ARM%20%7C%20Linux%20x64%20%7C%20Linux%20ARM%20%7C%20Windows%20x64-blue.svg?style=flat-square)](https://github.com/mburakmmm/vault/actions)
 [![NOX](https://img.shields.io/badge/NOX-v2.1.0-blue.svg?style=flat-square)](https://github.com/mburakmmm/nox-lang)
-[![Version: 1.0.0](https://img.shields.io/badge/Version-1.0.0-success.svg?style=flat-square)](CHANGELOG.md)
+[![Version: 1.0.1](https://img.shields.io/badge/Version-1.0.1-success.svg?style=flat-square)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Dual Backend](https://img.shields.io/badge/Backends-LLVM%20%7C%20QBE%20100%25%20Green-brightgreen.svg?style=flat-square)](tests/)
 [![Security: Fail--Closed](https://img.shields.io/badge/Security-Fail--Closed-red.svg?style=flat-square)](docs/security.md)

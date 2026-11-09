@@ -4,9 +4,31 @@
 from core.errors import ConfigError, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SIZE_LIMIT
 from nox.fs import exists, is_file, metadata, read_to_string, FileMetadata
 from nox.path import canonicalize, components, PathError
+from nox.os import getenv, OsError
 import nox.strings
 
 MAX_CONFIG_FILE_SIZE: int = 1048576 # 1 MiB limit
+
+def is_windows_os() -> bool:
+    try:
+        val_os: str = getenv("OS")
+        if nox.strings.eq_ignore_case(val_os, "Windows_NT"):
+            return True
+    except OsError:
+        pass
+    try:
+        val_windir: str = getenv("WINDIR")
+        if len(val_windir) > 0:
+            return True
+    except OsError:
+        pass
+    try:
+        val_sysroot: str = getenv("SystemRoot")
+        if len(val_sysroot) > 0:
+            return True
+    except OsError:
+        pass
+    return False
 
 def check_path_confinement(target_path: str, allowed_root: str) -> str:
     # If no allowed root specified, just canonicalize
@@ -32,12 +54,21 @@ def check_path_confinement(target_path: str, allowed_root: str) -> str:
     if len(target_comps) < len(root_comps):
         raise ConfigError(ERR_CONFIG_PATH_OUTSIDE_ROOT, target_path, "path escapes allowed root (insufficient depth)")
 
+    is_win: bool = is_windows_os()
     idx: int = 0
     while idx < len(root_comps):
         r_part: str = root_comps[idx]
         t_part: str = target_comps[idx]
-        # Case-insensitive component comparison for cross-platform robustness
-        if not nox.strings.eq_ignore_case(r_part, t_part):
+        
+        match_component: bool = False
+        if is_win:
+            # Case-insensitive component comparison for Windows
+            match_component = nox.strings.eq_ignore_case(r_part, t_part)
+        else:
+            # Case-sensitive component comparison for Linux, macOS and Unix
+            match_component = (r_part == t_part)
+
+        if not match_component:
             raise ConfigError(ERR_CONFIG_PATH_OUTSIDE_ROOT, target_path, "path escapes allowed root: component mismatch at '" + t_part + "'")
         idx = idx + 1
 

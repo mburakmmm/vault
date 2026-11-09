@@ -89,3 +89,25 @@ class ConfigEntry:
         self.origin = origin
         self.is_secret = is_secret
         self.is_default = is_default
+
+def clone_config_value(v: ConfigValue) -> ConfigValue:
+    cloned_arr: list[ConfigValue] = []
+    idx: int = 0
+    while idx < len(v.arr):
+        cloned_arr.append(clone_config_value(v.arr[idx]))
+        idx = idx + 1
+    
+    cloned_obj: dict[str, ConfigValue] = {}
+    obj_keys: list[str] = v.obj.keys()
+    o_idx: int = 0
+    while o_idx < len(obj_keys):
+        ok: str = obj_keys[o_idx]
+        cloned_obj[ok] = clone_config_value(v.obj[ok])
+        o_idx = o_idx + 1
+
+    return ConfigValue(v.kind, v.s, v.i, v.f, v.b, cloned_arr, cloned_obj)
+
+def clone_config_entry(e: ConfigEntry) -> ConfigEntry:
+    orig_o: SourceOrigin = e.origin
+    cloned_orig: SourceOrigin = SourceOrigin(orig_o.source_id, orig_o.source_kind, orig_o.profile, orig_o.precedence_rank)
+    return ConfigEntry(e.key, clone_config_value(e.val), e.presence, cloned_orig, e.is_secret, e.is_default)

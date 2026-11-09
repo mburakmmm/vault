@@ -141,10 +141,20 @@ def test_secret_cache_ttl() -> None:
     assert cache.active_count(now_t) == 0
     print("PASS: test_secret_cache_ttl")
 
+def test_sentinel_matching_redacted_label() -> None:
+    # A sentinel that is part of [REDACTED] or matches it must NEVER cause an infinite loop!
+    hostile_sentinels: list[str] = ["[RED", "[REDACTED]", "ACTED]"]
+    text: str = "Hostile message containing [RED and [REDACTED] and ACTED] tokens."
+    redacted: str = redact_string(text, hostile_sentinels)
+    assert "[REDACTED]" in redacted
+    assert "Hostile message" in redacted
+    print("PASS: test_sentinel_matching_redacted_label")
+
 # Run all test functions
 test_secret_01_text_redaction()
 test_secret_02_redacted_json_and_explain()
 test_secret_03_explicit_retrieval()
 test_taint_propagation_redaction()
 test_secret_cache_ttl()
+test_sentinel_matching_redacted_label()
 print("ALL REDACTION TESTS PASSED SUCCESSFULLY!")

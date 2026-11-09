@@ -27,6 +27,9 @@ def test_ssrf_and_scheme_validation() -> None:
     # 3. Reject hosts not in allowlist
     assert not validate_https_endpoint("https://evil-attacker.com/secret", allowlist)
     assert not validate_https_endpoint("https://vault.corp.internal.evil.com/secret", allowlist)
+    # Userinfo (@) SSRF injection attempt rejection (SEC-04)
+    assert not validate_https_endpoint("https://vault.corp.internal:secret@evil.com/v1/secrets", allowlist)
+    assert not validate_https_endpoint("https://admin:pass@vault.corp.internal/v1/secrets", allowlist)
 
     # 4. Accept valid allowlisted endpoints
     assert validate_https_endpoint("https://vault.corp.internal/v1/secrets", allowlist)

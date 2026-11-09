@@ -5,6 +5,26 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-11-09 (Security, Correctness & Reliability Patch)
+
+### Fixed
+- **Root Confinement Case Sensitivity (SEC-01):** Made path component comparison in `sources/files.nox` platform-aware. Linux, macOS, and Unix now enforce strict case-sensitivity (preventing `/data/config` vs `/data/Config` bypass), while Windows retains case-insensitivity.
+- **Dotenv Root Confinement Conformance (SEC-02):** `DotenvSource` in `env/source.nox` now enforces `allowed_root` confinement through `read_bounded_file()` and is plumbed through `ConfigBuilder.with_allowed_root()`.
+- **Remote HTTPS Provider Transport & SSRF Hardening (SEC-03, SEC-04):**
+  - Added real `StandardHttpTransport` in `providers/remote_http.nox` using `nox.http.request` with redirect inspection and timeout bounds.
+  - Implemented strict URL authority parsing that unconditionally rejects userinfo (`@`) credentials in URLs, stopping userinfo spoofing bypasses.
+- **Snapshot Immutability via Defensive Copying (IMMUT-01):** `ConfigSnapshot` now performs deep defensive cloning of `ConfigEntry` objects and dictionaries upon publication, protecting runtime snapshots against external mutation.
+- **Strict Secret Retrieval API Separation (SEC-05):** Calling `get_string()`, `get_int()`, `get_float()`, `get_bool()`, or `get_list()` on a key classified as a secret now fails closed (`ERR_CONFIG_SECRET_SOURCE_DENIED`). Secrets must be intentionally retrieved via `get_secret()` or `get_secret_value().reveal()`.
+- **Unicode UTF-8 Codepoint Parsing in .env (ENC-01):** Refactored quoted and unquoted value parsing in `env/parser.nox` to use codepoint indexing and slicing rather than mixing byte offsets with character counts. Added regression tests verifying Turkish characters (`İstanbul`, `Türkçe`, `şemsiye`, `öğrenci`, `çözüm`).
+- **Schema Defaults Ordering & Constraint Validation (ORD-01, VAL-01):**
+  - Injected schema default values prior to `resolve_interpolations()`, enabling expressions like `${DEFAULT_HOST}` to resolve correctly against schema defaults.
+  - Added full type coercion and bounds/range constraint validation for injected default values.
+- **Single-Pass Redaction & JSON String Escaping (ROB-01, ROB-02):**
+  - Replaced recursive `index_of()` string substitution with single-pass forward scanning in `secrets/redact.nox`, preventing infinite loops if a sentinel matches part of `[REDACTED]`.
+  - Replaced handwritten JSON string escaping with standard `nox.json.dump_string()` to ensure complete RFC 8259 escaping of all ASCII control characters (`\u0000`–`\u001f`).
+- **Release Pipeline Archive Packaging (REL-01):** Fixed `release.yml` archive generation using `git archive` to `$RUNNER_TEMP`, eliminating the `tar: .: file changed as we read it` runner error.
+- **Dual-Backend CI Verification (CI-01):** Updated GitHub Actions workflow to explicitly execute all 19 test suites against both `noxc test --backend qbe` and `noxc test --backend llvm` on all supported runner platforms (macOS ARM64, Linux x64, Linux ARM64, Windows x64).
+
 ## [1.0.0] - 2026-11-09 (Production Stable Release)
 
 ### Added

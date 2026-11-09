@@ -4,33 +4,31 @@
 from core.types import ConfigEntry, ConfigValue, SourceOrigin, PRESENCE_SUPPLIED, PRESENCE_EMPTY, make_string
 from core.errors import ConfigError, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SIZE_LIMIT
 from sources.interface import ConfigSource
+from sources.files import read_bounded_file
 from env.parser import parse_dotenv, EnvEntry, EnvParseError
-from nox.fs import exists, metadata, read_to_string, FileMetadata
+from nox.fs import exists
 
 class DotenvSource(ConfigSource):
     path: str
+    allowed_root: str
     optional: bool
 
-    def __init__(self: DotenvSource, path: str, optional: bool, rank: int, profile: str) -> None:
+    def __init__(self: DotenvSource, path: str, allowed_root: str, optional: bool, rank: int, profile: str) -> None:
         self.id = path
         self.kind = "dotenv"
         self.rank = rank
         self.profile = profile
         self.path = path
+        self.allowed_root = allowed_root
         self.optional = optional
 
     def load(self: DotenvSource) -> list[ConfigEntry]:
         entries: list[ConfigEntry] = []
-        if not exists(self.path):
-            if self.optional:
+        content: str = read_bounded_file(self.path, self.allowed_root, self.optional)
+        if len(content) == 0:
+            if not exists(self.path):
                 return entries
-            raise ConfigError(ERR_CONFIG_SOURCE_UNAVAILABLE, self.path, "required dotenv file does not exist")
 
-        meta: FileMetadata = metadata(self.path)
-        if meta.size > 1048576: # 1 MiB bound
-            raise ConfigError(ERR_CONFIG_SIZE_LIMIT, self.path, "dotenv file exceeds 1 MiB limit")
-
-        content: str = read_to_string(self.path)
         env_entries: list[EnvEntry] = parse_dotenv(content)
 
         idx: int = 0

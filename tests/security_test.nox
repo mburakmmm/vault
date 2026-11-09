@@ -56,4 +56,22 @@ except Exception:
 
 assert_true(req_caught, "missing required file must raise CONFIG_SOURCE_UNAVAILABLE")
 
+# -------------------------------------------------------------------------
+# Test 4: Dotenv Root Confinement Enforcement (SEC-02)
+# -------------------------------------------------------------------------
+from env.source import DotenvSource
+
+# Attempting to load a dotenv file outside allowed root must be rejected
+dotenv_confined: DotenvSource = DotenvSource("fixtures/dotenv/valid.env", "fixtures/config", False, 5, "base")
+dotenv_caught: bool = False
+try:
+    dotenv_confined.load()
+except ConfigError as err:
+    if err.code == ERR_CONFIG_PATH_OUTSIDE_ROOT:
+        dotenv_caught = True
+except Exception:
+    pass
+
+assert_true(dotenv_caught, "dotenv file escaping allowed root must be rejected with CONFIG_PATH_OUTSIDE_ROOT")
+
 print("SECURITY_TEST: ALL PASS")

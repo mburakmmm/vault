@@ -212,4 +212,19 @@ cmd_entries: list[EnvEntry] = parse_dotenv(cmd_input)
 assert_eq_int(len(cmd_entries), 1, "cmd input parsed")
 assert_eq_str(cmd_entries[0].value, "$(rm -rf /)", "command substitution preserved literally without execution")
 
+# -------------------------------------------------------------------------
+# Test 12: Unicode Multibyte UTF-8 Parsing (Turkish & Accents)
+# -------------------------------------------------------------------------
+utf8_input: str = "CITY='İstanbul'\nLANGUAGE=\"Türkçe\"\nMESSAGE=Hoşgeldiniz # inline comment\nACCENTS=\"éàçüöğış\"\n"
+utf8_entries: list[EnvEntry] = parse_dotenv(utf8_input)
+assert_eq_int(len(utf8_entries), 4, "4 utf8 entries parsed")
+assert_eq_str(utf8_entries[0].key, "CITY", "city key")
+assert_eq_str(utf8_entries[0].value, "İstanbul", "single-quoted Turkish character 'İ'")
+assert_eq_str(utf8_entries[1].key, "LANGUAGE", "language key")
+assert_eq_str(utf8_entries[1].value, "Türkçe", "double-quoted Turkish 'ü' and 'ç'")
+assert_eq_str(utf8_entries[2].key, "MESSAGE", "message key")
+assert_eq_str(utf8_entries[2].value, "Hoşgeldiniz", "unquoted Turkish with inline comment")
+assert_eq_str(utf8_entries[3].key, "ACCENTS", "accents key")
+assert_eq_str(utf8_entries[3].value, "éàçüöğış", "multibyte characters preserved exactly")
+
 print("ENV_PARSER_TEST: ALL PASS")

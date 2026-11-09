@@ -41,8 +41,16 @@ assert_eq_str(config.get_string("APP_NAME"), "VaultDemo", "app name from dotenv"
 # PORT overridden by runtime override to 9090
 assert_eq_int(config.get_int("PORT"), 9090, "port from override")
 
-# DATABASE_URL loaded from process environment
-assert_eq_str(config.get_string("DATABASE_URL"), "postgres://admin:secret@db.prod.internal:5432/live", "db url from env")
+# DATABASE_URL loaded from process environment (accessed via explicit get_secret())
+assert_eq_str(config.get_secret("DATABASE_URL"), "postgres://admin:secret@db.prod.internal:5432/live", "db url from env")
+
+# Verify calling get_string() on secret DATABASE_URL is strictly blocked
+secret_get_caught: bool = False
+try:
+    config.get_string("DATABASE_URL")
+except Exception:
+    secret_get_caught = True
+assert_true(secret_get_caught, "get_string on secret key must fail closed")
 
 # FEATURE_VERBOSE resolved from schema default (false)
 assert_true(not config.get_bool("FEATURE_VERBOSE"), "feature verbose default false")

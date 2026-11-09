@@ -146,7 +146,7 @@ def test_profile_01_production_strict_checks() -> None:
     dev_builder.with_profile("development")
     dev_builder.with_schema(schema)
     dev_snap: ConfigSnapshot = dev_builder.build()
-    assert dev_snap.get_string("DB_SECRET") == "hardcoded_dummy_pw"
+    assert dev_snap.get_secret("DB_SECRET") == "hardcoded_dummy_pw"
 
     # In production with an explicit non-default secret supplied, it succeeds!
     prod_builder: ConfigBuilder = ConfigBuilder()
@@ -154,7 +154,7 @@ def test_profile_01_production_strict_checks() -> None:
     prod_builder.with_schema(schema)
     prod_builder.with_override("DB_SECRET", "super-strong-production-token")
     prod_snap: ConfigSnapshot = prod_builder.build()
-    assert prod_snap.get_string("DB_SECRET") == "super-strong-production-token"
+    assert prod_snap.get_secret("DB_SECRET") == "super-strong-production-token"
     print("PASS: test_profile_01_production_strict_checks")
 
 # Run all test functions

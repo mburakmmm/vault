@@ -1,8 +1,8 @@
 # VAULT — Immutable Config Snapshot
 # Module: core.snapshot
 
-from core.types import ConfigEntry, ConfigValue, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, VAL_ARRAY, PRESENCE_NULL, PRESENCE_MISSING
-from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH
+from core.types import ConfigEntry, ConfigValue, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, VAL_ARRAY, PRESENCE_NULL, PRESENCE_MISSING, clone_config_entry
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_SECRET_SOURCE_DENIED
 from secrets.mark import SecretValue
 from secrets.reveal import reveal_secret_entry, create_secret_value
 from secrets.redact import to_redacted_json
@@ -13,7 +13,16 @@ class ConfigSnapshot:
     snapshot_version: str
 
     def __init__(self: ConfigSnapshot, entries: dict[str, ConfigEntry], version: str) -> None:
-        self.entries = entries
+        # Deep defensive copy to guarantee snapshot immutability against external mutation
+        defensive_copy: dict[str, ConfigEntry] = {}
+        all_keys: list[str] = entries.keys()
+        idx: int = 0
+        while idx < len(all_keys):
+            k: str = all_keys[idx]
+            defensive_copy[k] = clone_config_entry(entries[k])
+            idx = idx + 1
+
+        self.entries = defensive_copy
         self.snapshot_version = version
 
     def has(self: ConfigSnapshot, key: str) -> bool:
@@ -24,11 +33,22 @@ class ConfigSnapshot:
             return False
         return self.entries[key].presence == PRESENCE_NULL
 
+    def is_secret(self: ConfigSnapshot, key: str) -> bool:
+        if key not in self.entries:
+            return False
+        return self.entries[key].is_secret
+
+    def keys(self: ConfigSnapshot) -> list[str]:
+        return self.entries.keys()
+
     def get_string(self: ConfigSnapshot, key: str) -> str:
         if key not in self.entries:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self.entries[key]
+        if e.is_secret:
+            raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
+
         if e.presence == PRESENCE_NULL:
             raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
 
@@ -51,6 +71,9 @@ class ConfigSnapshot:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self.entries[key]
+        if e.is_secret:
+            raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
+
         if e.presence == PRESENCE_NULL:
             raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
 
@@ -71,6 +94,9 @@ class ConfigSnapshot:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self.entries[key]
+        if e.is_secret:
+            raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
+
         if e.presence == PRESENCE_NULL:
             raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
 
@@ -93,6 +119,9 @@ class ConfigSnapshot:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self.entries[key]
+        if e.is_secret:
+            raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
+
         if e.presence == PRESENCE_NULL:
             raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
 
@@ -120,6 +149,9 @@ class ConfigSnapshot:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self.entries[key]
+        if e.is_secret:
+            raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
+
         if e.presence == PRESENCE_NULL:
             raise ConfigError(ERR_CONFIG_NULL_NOT_ALLOWED, key, "configuration key is null")
 

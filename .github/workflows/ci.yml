@@ -94,9 +94,13 @@ jobs:
           noxc check adapters/noxen.nox
           noxc check adapters/nova.nox
 
-      - name: Run Test Suites
+      - name: Run Test Suites (QBE Backend)
         run: |
-          noxc test
+          noxc test --backend qbe
+
+      - name: Run Test Suites (LLVM Backend)
+        run: |
+          noxc test --backend llvm
 
       - name: Verify CLI Tool
         run: |
