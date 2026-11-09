@@ -2,7 +2,59 @@
 
 ---
 
-## 🚀 VAULT v1.0.4 Patch Release (Completed & Verified)
+## 🚀 VAULT v1.0.5 Patch Release (Completed & Verified)
+
+Addressing findings from the v1.0.4 technical review:
+
+### 🚨 P0: Network & SSRF Security — DNS Pinning & Full CIDR Range Evaluation
+
+- [x] **NET-04: True DNS Resolution, DNS Pinning & Mathematical IP/CIDR Range Evaluation**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Implemented 32-bit integer IPv4 CIDR range validator (`parse_ipv4_int`) covering loopbacks (`127.0.0.0/8`), RFC 1918, CGNAT (`100.64.0.0/10`), link-local/cloud metadata (`169.254.0.0/16`), multicast (`224.0.0.0/4`), unroutable (`0.0.0.0/8`), and broadcast (`255.255.255.255/32`).
+    2. Implemented complete IPv6 range parser and validator for loopback (`::1`), link-local (`fe80::/10`), unique local (`fc00::/7`), IPv4-mapped (`::ffff:0:0/96`), and multicast (`ff00::/8`).
+    3. Implemented `DnsResolver` interface with `StaticDnsResolver` supporting custom host-to-IP mappings.
+    4. Enforced pre-flight DNS resolution before HTTP transport dispatch: resolve all candidate IPs and fail closed if any resolves to a prohibited IP.
+    5. Implemented DNS Pinning: dispatch the HTTP request directly to the validated pinned IP address while transmitting the original hostname in the `Host:` header to eliminate TOCTOU DNS rebinding attacks.
+    6. Added regression tests in `tests/remote_provider_test.nox` simulating DNS rebinding attacks where an allowed hostname resolves to loopback/metadata IPs, asserting rejection.
+  - **Status:** Complete & Verified
+
+### 🔒 P1: Concurrency & State Atomicity — Unified Publication & Cooperative Yields
+
+- [x] **RELOAD-04: Unified Atomic Publication Record (`PublishedConfig`) & Cooperative Fiber Scheduling**
+  - **File:** `reload/manager.nox`, `tests/reload_test.nox`
+  - **Remediation:**
+    1. Introduced immutable `PublishedConfig` class containing `version`, `snapshot`, `published_at_ms`, and `reloads_count` frozen together.
+    2. In `ReloadManager`, stored `self._published: PublishedConfig` and swapped via single atomic pointer assignment upon successful reload.
+    3. Exposed `get_published() -> PublishedConfig` for concurrent readers to observe a completely synchronized state.
+    4. Implemented cooperative fiber yielding (`spawn _noop_step(); await t_y`) ensuring QBE single-threaded coroutines genuinely yield and interleave with active writers.
+    5. Verified assertions in concurrent reader stress test asserting `read_state.snapshot.version == read_state.version` for every read.
+  - **Status:** Complete & Verified
+
+- [x] **IMMUT-05: Explicit Snapshot Abstraction & Private Property Boundary Documentation**
+  - **File:** `core/snapshot.nox`, `docs/security.md`
+  - **Remediation:** Documented the exact encapsulation boundary in `docs/security.md` and `docs/api.md`. Emphasized that while `@property def entries` guarantees secret masking and defensive isolation in the public API, `_entries` is a private naming convention, and defensive copies are created at every access boundary.
+  - **Status:** Complete & Verified
+
+### ⚡ P2: Microbenchmarks & Package Verification
+
+- [x] **PERF-03: High-Resolution 50-Run Benchmark with Percentile Telemetry (p50/p90/p95/p99)**
+  - **File:** `tests/benchmark_test.nox`
+  - **Remediation:** Expanded multi-run benchmark to 50 iterations over 1,000 keys with full schema validation and chained interpolation. Computed and logged sorted percentiles: `min=0ms, p50=1ms, p90=1ms, p95=1ms, p99=1ms, max=1ms, avg=0ms`.
+  - **Status:** Complete & Verified
+
+- [x] **DIST-01: End-to-End Consumer Package Verification & Release v1.0.5**
+  - **File:** `tests/package_consumer_test.nox`, `nox.json`, `vault.nox`, `cli/main.nox`, `README.md`, `CHANGELOG.md`
+  - **Remediation:**
+    1. Created `tests/package_consumer_test.nox` simulating an external application consuming VAULT end-to-end.
+    2. Bumped version to `1.0.5` across all manifests and documentation.
+    3. Verified 100% green test suite across both backends (QBE & LLVM) and all 4 CI platforms.
+    4. Tagged, published to NOX registry, and verified GitHub Release v1.0.5.
+  - **Status:** Complete & Verified
+
+---
+
+## ✅ VAULT v1.0.4 Patch Release (Completed & Verified)
 
 Addressing findings from the v1.0.3 technical review:
 

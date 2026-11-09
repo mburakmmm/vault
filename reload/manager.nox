@@ -6,6 +6,18 @@ from core.snapshot import ConfigSnapshot
 from core.errors import ConfigError
 from nox.atomic import new_bool, AtomicBool
 
+class PublishedConfig:
+    version: int
+    snapshot: ConfigSnapshot
+    published_at_ms: int
+    reload_count: int
+
+    def __init__(self: PublishedConfig, version: int, snapshot: ConfigSnapshot, published_at_ms: int, reload_count: int) -> None:
+        self.version = version
+        self.snapshot = snapshot
+        self.published_at_ms = published_at_ms
+        self.reload_count = reload_count
+
 class ReloadResult:
     success: bool
     version: int
@@ -22,20 +34,19 @@ class ReloadResult:
 
 class ReloadManager:
     builder: ConfigBuilder
-    current_snapshot: ConfigSnapshot
-    version: int
+    _published: PublishedConfig
     reload_count: int
     failed_reloads: int
     _atomic_reloading: AtomicBool
 
     def __init__(self: ReloadManager, builder: ConfigBuilder) -> None:
         self.builder = builder
-        self.version = 1
         self.reload_count = 0
         self.failed_reloads = 0
         self._atomic_reloading = new_bool(False)
         self.builder.builder_version = "v1"
-        self.current_snapshot = self.builder.build()
+        initial_snap: ConfigSnapshot = self.builder.build()
+        self._published = PublishedConfig(1, initial_snap, 0, 0)
 
     @property
     def is_reloading(self: ReloadManager) -> bool:
@@ -44,41 +55,53 @@ class ReloadManager:
     def set_reloading_for_test(self: ReloadManager, reloading: bool) -> None:
         self._atomic_reloading.store(reloading)
 
+    def get_published(self: ReloadManager) -> PublishedConfig:
+        return self._published
+
     def snapshot(self: ReloadManager) -> ConfigSnapshot:
-        return self.current_snapshot
+        return self._published.snapshot
+
+    @property
+    def current_snapshot(self: ReloadManager) -> ConfigSnapshot:
+        return self._published.snapshot
+
+    @property
+    def version(self: ReloadManager) -> int:
+        return self._published.version
 
     def get_version(self: ReloadManager) -> int:
-        return self.version
+        return self._published.version
 
     def reload(self: ReloadManager) -> ReloadResult:
         # RELOAD-03: True hardware-level Atomic Compare-And-Swap (CAS)
         # Guarantees strictly one thread/worker can enter the reload critical section at any time!
+        current_pub: PublishedConfig = self._published
         if not self._atomic_reloading.compare_and_swap(False, True):
-            return ReloadResult(False, self.version, "CONFIG_RELOAD_IN_PROGRESS", "another reload is currently in progress", self.current_snapshot)
+            return ReloadResult(False, current_pub.version, "CONFIG_RELOAD_IN_PROGRESS", "another reload is currently in progress", current_pub.snapshot)
 
         self.reload_count = self.reload_count + 1
-        next_version_num: int = self.version + 1
+        next_version_num: int = current_pub.version + 1
         self.builder.builder_version = "v" + str(next_version_num)
 
         try:
             # 1. Build complete candidate snapshot off to the side
             candidate: ConfigSnapshot = self.builder.build()
 
-            # 2. Validation succeeded: publish new snapshot atomically
-            self.version = next_version_num
-            self.current_snapshot = candidate
+            # 2. RELOAD-04: Publish new snapshot and version atomically in a single PublishedConfig container
+            new_pub: PublishedConfig = PublishedConfig(next_version_num, candidate, 0, self.reload_count)
+            self._published = new_pub  # Atomic reference assignment
             self._atomic_reloading.store(False)
-            return ReloadResult(True, self.version, "", "", self.current_snapshot)
+            return ReloadResult(True, new_pub.version, "", "", new_pub.snapshot)
 
         except ConfigError as err:
             # 3. Validation or load failed: retain entire previous snapshot wholly intact
             self.failed_reloads = self.failed_reloads + 1
-            self.builder.builder_version = "v" + str(self.version)
+            self.builder.builder_version = "v" + str(current_pub.version)
             self._atomic_reloading.store(False)
-            return ReloadResult(False, self.version, err.code, err.message, self.current_snapshot)
+            return ReloadResult(False, current_pub.version, err.code, err.message, current_pub.snapshot)
 
         except Exception:
             self.failed_reloads = self.failed_reloads + 1
-            self.builder.builder_version = "v" + str(self.version)
+            self.builder.builder_version = "v" + str(current_pub.version)
             self._atomic_reloading.store(False)
-            return ReloadResult(False, self.version, "CONFIG_RELOAD_ERROR", "unexpected error during reload", self.current_snapshot)
+            return ReloadResult(False, current_pub.version, "CONFIG_RELOAD_ERROR", "unexpected error during reload", current_pub.snapshot)

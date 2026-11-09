@@ -1,0 +1,83 @@
+# VAULT — External Package Consumer Integration Test (DIST-01)
+# Verifies complete consumer ergonomics:
+# 1. Public facade imports from 'vault'
+# 2. Typed schema definition and validation
+# 3. Secret isolation, secret gate, and structural redaction
+# 4. Safe provenance inspection without secret leakage
+# 5. Snapshot entries property encapsulation
+# 6. Unified atomic reload with PublishedConfig and rollback
+
+from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot, ReloadManager, ReloadResult, PublishedConfig, ConfigEntry, version
+from sources.memory import MemorySource
+from nox.test import assert_true, assert_eq_str, assert_eq_int
+
+def test_consumer_end_to_end_workflow() -> None:
+    # 1. Verify library version
+    v: str = version()
+    assert_eq_str(v, "1.0.5", "vault package version check")
+
+    # 2. Define schema
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_ENV", True, False, "production", False, True)
+    schema.add_int("HTTP_PORT", True, False, 8080, True, 1024, True, 65535, False)
+    schema.add_string("DATABASE_URL", True, False, "", False, True)
+    schema.add_string("JWT_SECRET", True, False, "", True, True)
+
+    # 3. Set memory source
+    mem: MemorySource = MemorySource("app_config", 2, "base", False)
+    mem.set_string("APP_ENV", "production")
+    mem.set_string("HTTP_PORT", "8443")
+    mem.set_string("DATABASE_URL", "postgres://user:pass@db.internal:5432/prod")
+    mem.set_string("JWT_SECRET", "super_secret_jwt_signing_key_999")
+
+    # 4. Build configuration
+    builder: ConfigBuilder = ConfigBuilder()
+    builder.with_schema(schema)
+    builder.with_source(mem)
+
+    # 5. Initialize ReloadManager
+    mgr: ReloadManager = ReloadManager(builder)
+    pub: PublishedConfig = mgr.get_published()
+    assert_eq_int(pub.version, 1, "initial published version")
+
+    snap: ConfigSnapshot = pub.snapshot
+    assert_eq_str(snap.get_string("APP_ENV"), "production", "app env check")
+    assert_eq_int(snap.get_int("HTTP_PORT"), 8443, "http port check")
+
+    # 6. Verify Secret Protection
+    # A. Normal getter denies secret
+    secret_denied: bool = False
+    try:
+        snap.get_string("JWT_SECRET")
+    except Exception:
+        secret_denied = True
+    assert_true(secret_denied, "normal getter must deny secret")
+
+    # B. Explicit retrieval succeeds
+    assert_eq_str(snap.get_secret("JWT_SECRET"), "super_secret_jwt_signing_key_999", "explicit secret retrieval")
+
+    # C. Redacted JSON masks secret
+    redacted_json: str = snap.redacted_json()
+    assert_true("super_secret_jwt_signing_key_999" not in redacted_json, "secret omitted from JSON")
+    assert_true("[REDACTED]" in redacted_json, "redacted label in JSON")
+
+    # D. Explain provenance never leaks secret
+    expl: str = snap.explain("JWT_SECRET")
+    assert_true("super_secret_jwt_signing_key_999" not in expl, "secret omitted from explain")
+    assert_true("JWT_SECRET" in expl, "key name in explain")
+
+    # E. Snapshot entries property masks secret
+    entries_dict: dict[str, ConfigEntry] = snap.entries
+    assert_true("JWT_SECRET" in entries_dict, "JWT_SECRET in entries")
+    assert_eq_str(entries_dict["JWT_SECRET"].val.s, "[REDACTED]", "entries property must redact secret")
+
+    # 7. Safe Validated Reload
+    mem.set_string("HTTP_PORT", "9443")
+    reload_res: ReloadResult = mgr.reload()
+    assert_true(reload_res.success, "valid reload must succeed")
+    assert_eq_int(reload_res.version, 2, "version incremented")
+    assert_eq_int(mgr.get_published().snapshot.get_int("HTTP_PORT"), 9443, "updated port after reload")
+
+    print("PASS: test_consumer_end_to_end_workflow")
+
+test_consumer_end_to_end_workflow()

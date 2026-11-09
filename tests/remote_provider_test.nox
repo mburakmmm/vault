@@ -8,7 +8,7 @@ from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG
 from schema.fields import ConfigSchema
 from secrets.mark import SecretValue
 from providers.interface import SecretFetchResult, ProviderHealth
-from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host
+from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host, DnsResolver, StaticDnsResolver
 
 def test_ssrf_and_scheme_validation() -> None:
     allowlist: list[str] = ["vault.corp.internal"]
@@ -69,6 +69,20 @@ def test_ssrf_and_scheme_validation() -> None:
     assert not validate_resolved_ip("::1")
     assert not validate_resolved_ip("fe80::1")
     assert not validate_resolved_ip("fc00::1")
+    # NET-04: Additional mathematical CIDR boundary unit checks
+    assert not validate_resolved_ip("224.0.0.1")
+    assert not validate_resolved_ip("239.255.255.255")
+    assert not validate_resolved_ip("240.0.0.1")
+    assert not validate_resolved_ip("10.0.0.0")
+    assert not validate_resolved_ip("10.255.255.255")
+    assert not validate_resolved_ip("172.16.0.0")
+    assert not validate_resolved_ip("172.31.255.255")
+    assert not validate_resolved_ip("192.168.0.0")
+    assert not validate_resolved_ip("192.168.255.255")
+    assert not validate_resolved_ip("169.254.0.1")
+    assert not validate_resolved_ip("169.254.255.254")
+    assert validate_resolved_ip("1.1.1.1")
+    assert validate_resolved_ip("8.8.8.8")
     assert validate_resolved_ip("93.184.216.34")
     assert validate_resolved_ip("2606:2800:220:1:248:1893:25c8:1946")
 
@@ -360,6 +374,56 @@ def test_key_traversal_and_injection_rejection() -> None:
 
     print("PASS: test_key_traversal_and_injection_rejection")
 
+def test_net_04_dns_resolution_and_pinning() -> None:
+    allowlist: list[str] = ["vault.corp.internal"]
+    mock_t: MockHttpTransport = MockHttpTransport()
+    static_dns: StaticDnsResolver = StaticDnsResolver()
+
+    # 1. Simulate DNS Rebinding attack to AWS metadata (169.254.169.254)
+    static_dns.add_record("vault.corp.internal", ["169.254.169.254"])
+    prov_meta: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "dns_rebind_meta",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "Authorization",
+        "tok_abc",
+        mock_t,
+        static_dns
+    )
+    res1: SecretFetchResult = prov_meta.get("LEAK_KEY")
+    assert not res1.found
+    assert res1.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    # Network transport was never touched because pre-flight DNS check failed closed!
+    assert mock_t.call_count == 0
+
+    # 2. Simulate DNS Rebinding attack to local loopback (127.0.0.1)
+    static_dns.add_record("vault.corp.internal", ["127.0.0.1"])
+    res2: SecretFetchResult = prov_meta.get("LEAK_KEY")
+    assert not res2.found
+    assert res2.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert mock_t.call_count == 0
+
+    # 3. Simulate DNS Rebinding attack to RFC 1918 private subnet (10.0.0.5)
+    static_dns.add_record("vault.corp.internal", ["10.0.0.5"])
+    res3: SecretFetchResult = prov_meta.get("LEAK_KEY")
+    assert not res3.found
+    assert res3.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert mock_t.call_count == 0
+
+    # 4. Valid public IP: Verified DNS Pinning dispatch with Host virtual hosting
+    static_dns.add_record("vault.corp.internal", ["93.184.216.34"])
+    mock_t.add_route("https://vault.corp.internal/v1/secrets/STRIPE_KEY", 200, "pinned_sk_live_9988", "")
+    res4: SecretFetchResult = prov_meta.get("STRIPE_KEY")
+    assert res4.found
+    sec: SecretValue | None = res4.val
+    assert sec is not None
+    if sec is not None:
+        assert sec.reveal() == "pinned_sk_live_9988"
+        assert sec.to_string() == "[REDACTED]"
+    assert mock_t.call_count == 1
+
+    print("PASS: test_net_04_dns_resolution_and_pinning")
+
 # Run all test functions
 test_ssrf_and_scheme_validation()
 test_hermetic_fetch_success()
@@ -369,4 +433,5 @@ test_auth_rejection_no_secret_leak()
 test_response_size_ceiling()
 test_remote_provider_in_config_builder()
 test_key_traversal_and_injection_rejection()
+test_net_04_dns_resolution_and_pinning()
 print("ALL REMOTE HTTP PROVIDER TESTS PASSED SUCCESSFULLY!")

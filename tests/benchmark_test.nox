@@ -185,11 +185,10 @@ def test_statistical_benchmark_multirun() -> None:
     warmup_snap: ConfigSnapshot = warmup_builder.build()
     assert_true(len(warmup_snap.keys()) == 1000, "Warm-up must produce 1000 keys")
 
-    # 10 Measured runs
-    runs: int = 10
+    # PERF-03: Multi-run microbenchmark with warm-up (50 runs) collecting p50/p90/p95/p99 percentiles
+    runs: int = 50
     total_ms: int = 0
-    min_ms: int = 999999
-    max_ms: int = 0
+    times: list[int] = []
 
     run_idx: int = 0
     while run_idx < runs:
@@ -202,15 +201,30 @@ def test_statistical_benchmark_multirun() -> None:
 
         assert_true(len(s.keys()) == 1000, "Snapshot in run " + str(run_idx) + " must have 1000 keys")
         total_ms = total_ms + elapsed
-        if elapsed < min_ms:
-            min_ms = elapsed
-        if elapsed > max_ms:
-            max_ms = elapsed
-
+        times.append(elapsed)
         run_idx = run_idx + 1
 
+    # Sort times to compute exact percentiles
+    sort_i: int = 1
+    while sort_i < len(times):
+        val: int = times[sort_i]
+        sort_j: int = sort_i - 1
+        while sort_j >= 0 and times[sort_j] > val:
+            times[sort_j + 1] = times[sort_j]
+            sort_j = sort_j - 1
+        times[sort_j + 1] = val
+        sort_i = sort_i + 1
+
+    min_ms: int = times[0]
+    p50_ms: int = times[25] # 50th percentile (median)
+    p90_ms: int = times[45] # 90th percentile
+    p95_ms: int = times[47] # 95th percentile
+    p99_ms: int = times[49] # 99th percentile
+    max_ms: int = times[len(times) - 1]
     avg_ms: int = total_ms // runs
-    print("Statistical Benchmark (10 runs, 1000 keys): min=" + str(min_ms) + "ms, max=" + str(max_ms) + "ms, avg=" + str(avg_ms) + "ms")
+
+    print("Statistical Microbenchmark (50 runs, 1000 keys): min=" + str(min_ms) + "ms, p50=" + str(p50_ms) + "ms, p90=" + str(p90_ms) + "ms, p95=" + str(p95_ms) + "ms, p99=" + str(p99_ms) + "ms, max=" + str(max_ms) + "ms, avg=" + str(avg_ms) + "ms")
+    assert_true(p95_ms < 1000, "p95 latency must be < 1000ms, actual: " + str(p95_ms) + " ms")
     assert_true(avg_ms < 1000, "Statistical average latency must be < 1000ms, actual: " + str(avg_ms) + " ms")
 
 test_statistical_benchmark_multirun()

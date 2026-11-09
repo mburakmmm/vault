@@ -6,7 +6,7 @@ from core.snapshot import ConfigSnapshot
 from core.errors import ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_INTERPOLATION_CYCLE
 from schema.fields import ConfigSchema
 from sources.memory import MemorySource
-from reload.manager import ReloadManager, ReloadResult
+from reload.manager import ReloadManager, ReloadResult, PublishedConfig
 import nox.time
 
 def test_reload_02_successful_reload() -> None:
@@ -53,6 +53,13 @@ def test_reload_02_successful_reload() -> None:
     assert snap_v1.get_int("PORT") == 8080
     assert snap_v1.get_string("APP_NAME") == "VaultService"
     assert snap_v1.version() == "v1"
+
+    # RELOAD-04: Test unified PublishedConfig record
+    pub: PublishedConfig = manager.get_published()
+    assert pub.version == 2
+    assert pub.snapshot.get_string("APP_NAME") == "VaultService-V2"
+    assert pub.snapshot.get_int("PORT") == 9000
+
     print("PASS: test_reload_02_successful_reload")
 
 def test_reload_01_invalid_config_rollback() -> None:
@@ -236,29 +243,35 @@ b_stress.with_source(mem_stress)
 
 mgr_stress: ReloadManager = ReloadManager(b_stress)
 
+async def _noop_step() -> None:
+    pass
+
 async def concurrent_reader_task(task_id: int) -> int:
     valid_reads: int = 0
     i: int = 0
     while i < 150:
-        snap: ConfigSnapshot = mgr_stress.snapshot()
+        pub: PublishedConfig = mgr_stress.get_published()
+        snap: ConfigSnapshot = pub.snapshot
+        v: int = pub.version
         port: int = snap.get_int("PORT")
         name: str = snap.get_string("APP_NAME")
-        # Invariant: Must always be either (8081, "Version1App") OR (9092, "Version2App")
-        # Zero torn state permitted!
-        if port == 8081 and name == "Version1App":
+        # Invariant: Must always be either (8081, "Version1App", v=1) OR (9092, "Version2App", v=2)
+        # Snapshot and published version must be in 100% atomic lockstep!
+        if v == 1 and port == 8081 and name == "Version1App":
             valid_reads = valid_reads + 1
-        elif port == 9092 and name == "Version2App":
+        elif v == 2 and port == 9092 and name == "Version2App":
             valid_reads = valid_reads + 1
 
-        # Yield execution to force scheduler context switches on cooperative (QBE) & parallel (LLVM) backends
-        if i % 25 == 0:
-            nox.time.sleep_ms(1)
+        # RELOAD-04: Genuine cooperative fiber yield to force task context switches on single-threaded QBE & multi-threaded LLVM
+        t_y: Task[None] = spawn _noop_step()
+        await t_y
         i = i + 1
     return valid_reads
 
 async def concurrent_writer_task(step: int) -> bool:
-    # Small pause to ensure readers are actively polling during reload
-    nox.time.sleep_ms(2)
+    # Yield to let readers start loop
+    t_w_y: Task[None] = spawn _noop_step()
+    await t_w_y
     mem_stress.set_string("APP_NAME", "Version2App")
     mem_stress.set_string("PORT", "9092")
     res: ReloadResult = mgr_stress.reload()

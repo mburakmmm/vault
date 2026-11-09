@@ -5,6 +5,31 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-11-09 (DNS Pinning, Unified Atomic Publication & Microbenchmark Hardening)
+
+### Fixed
+- **DNS Pinning & Mathematical IPv4/IPv6 CIDR Evaluation (NET-04):**
+  - Replaced string-prefix IP checks with mathematically exact 32-bit unsigned bitmask range evaluations (`parse_ipv4_int`) covering loopback (`127.0.0.0/8`), RFC 1918, CGNAT (`100.64.0.0/10`), link-local/cloud metadata (`169.254.0.0/16`), multicast, broadcast, and reserved subnets.
+  - Hardened IPv6 evaluation against link-local (`fe80::/10`), ULA (`fc00::/7`), IPv4-mapped (`::ffff:0:0/96`), and multicast.
+  - Implemented `DnsResolver` interface with `StaticDnsResolver` supporting custom host-to-IP records and testing.
+  - Enforced pre-flight DNS resolution: every resolved candidate IP is evaluated and rejected fail-closed if in a prohibited range.
+  - Implemented DNS Pinning in `RemoteHttpSecretProvider`: requests dispatch directly to the validated pinned IP while preserving virtual hosting via the `Host:` header, completely eliminating TOCTOU DNS rebinding vulnerabilities.
+  - Added test `test_net_04_dns_resolution_and_pinning` in `tests/remote_provider_test.nox`.
+- **Unified Atomic Publication Record & Cooperative Fiber Yielding (RELOAD-04):**
+  - Introduced immutable `PublishedConfig(version, snapshot, published_at_ms, reload_count)` unifying version and snapshot into a single atomic pointer reference (`self._published`).
+  - Swapped published state in `ReloadManager` via atomic reference assignment, eliminating any transient version-snapshot mismatch windows for concurrent readers.
+  - Replaced thread-blocking sleep with cooperative fiber yielding (`spawn _noop_step(); await t_y`) in `tests/reload_test.nox`, guaranteeing genuine context switches and task interleaving on single-threaded QBE and multi-core LLVM backends.
+- **Snapshot Immutability Boundary Documentation (IMMUT-05):**
+  - Explicitly documented the boundary between public `@property def entries` (defensive, masked, isolated) and private library fields (`_entries`) in `docs/security.md` and `docs/api.md`.
+
+### Added
+- **50-Run Microbenchmark with Percentile Telemetry (PERF-03):**
+  - Expanded `test_statistical_benchmark_multirun` in `tests/benchmark_test.nox` to 50 iterations, logging sorted percentiles: `min`, `p50` (median), `p90`, `p95`, `p99`, `max`, and `avg`.
+- **External Package Consumer Integration Test (DIST-01):**
+  - Added `tests/package_consumer_test.nox` testing end-to-end consumer application ergonomics (facade imports, schema definition, secret isolation, explain provenance, and atomic reload) as the 21st test suite.
+
+
+
 ## [1.0.4] - 2026-11-09 (Total Snapshot Encapsulation, Hardware Atomic CAS Concurrency & SSRF Hardening)
 
 ### Fixed

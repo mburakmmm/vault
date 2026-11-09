@@ -24,7 +24,7 @@ def test_cli_version() -> None:
     assert run_cli(["version"]) == 0
     assert run_cli(["--version"]) == 0
     assert run_cli(["-v"]) == 0
-    assert CLI_VERSION == "1.0.4"
+    assert CLI_VERSION == "1.0.5"
     print("PASS: test_cli_version")
 
 def test_cli_validate_success() -> None:

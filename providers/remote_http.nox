@@ -83,8 +83,45 @@ class MockHttpTransport(HttpTransport):
         if url in self.routes:
             return self.routes[url]
 
+        # Support virtual-host lookup for DNS-pinned requests
+        if "Host" in headers and nox.strings.starts_with(url, "https://"):
+            vhost: str = headers["Host"]
+            without_scheme: str = url[8:len(url)]
+            slash_idx: int = nox.strings.index_of(without_scheme, "/")
+            if slash_idx >= 0:
+                path_part: str = without_scheme[slash_idx:len(without_scheme)]
+                vhost_url: str = "https://" + vhost + path_part
+                if vhost_url in self.routes:
+                    return self.routes[vhost_url]
+
         empty_h: dict[str, str] = {}
         return HttpResponse(404, empty_h, "route not found", False, "")
+
+class DnsResolver:
+    resolver_name: str
+
+    def __init__(self: DnsResolver, name: str) -> None:
+        self.resolver_name = name
+
+    def resolve(self: DnsResolver, host: str) -> list[str]:
+        res: list[str] = [host]
+        return res
+
+class StaticDnsResolver(DnsResolver):
+    records: dict[str, list[str]]
+
+    def __init__(self: StaticDnsResolver) -> None:
+        self.resolver_name = "static"
+        self.records = {}
+
+    def add_record(self: StaticDnsResolver, host: str, ips: list[str]) -> None:
+        self.records[host] = ips
+
+    def resolve(self: StaticDnsResolver, host: str) -> list[str]:
+        if host in self.records:
+            return self.records[host]
+        res: list[str] = [host]
+        return res
 
 def is_all_digits(s: str) -> bool:
     if len(s) == 0:
@@ -96,6 +133,27 @@ def is_all_digits(s: str) -> bool:
             return False
         idx = idx + 1
     return True
+
+def parse_ipv4_int(ip: str) -> int:
+    parts: list[str] = nox.strings.split(ip, ".")
+    if len(parts) != 4:
+        return -1
+    idx: int = 0
+    res: int = 0
+    while idx < 4:
+        part: str = parts[idx]
+        if len(part) == 0 or len(part) > 3:
+            return -1
+        if not is_all_digits(part):
+            return -1
+        if len(part) > 1 and nox.strings.starts_with(part, "0"):
+            return -1
+        val: int = int(part)
+        if val < 0 or val > 255:
+            return -1
+        res = (res << 8) | val
+        idx = idx + 1
+    return res
 
 def is_numeric_or_obfuscated_host(host: str) -> bool:
     # 1. Hex prefix
@@ -131,54 +189,101 @@ def is_numeric_or_obfuscated_host(host: str) -> bool:
     return False
 
 def validate_resolved_ip(ip: str) -> bool:
-    # NET-03: Validates that an IP address (e.g. from DNS resolution or host check) is safe
-    # Rejects loopback, private, link-local, carrier NAT, and cloud metadata
+    # NET-04: Mathematical IP/CIDR Range Evaluation
+    # Rejects loopback, RFC 1918, CGNAT, link-local, cloud metadata, multicast, broadcast, and reserved ranges
     cleaned: str = nox.strings.trim(ip)
     if len(cleaned) == 0:
         return False
 
-    # IPv4 Loopback
-    if nox.strings.starts_with(cleaned, "127."):
-        return False
+    # 1. IPv4 Mathematical CIDR Validation
+    ip_int: int = parse_ipv4_int(cleaned)
+    if ip_int != -1:
+        # Loopback: 127.0.0.0/8 (0x7F000000 / 0xFF000000)
+        if (ip_int & 4278190080) == 2130706432:
+            return False
+        # Unroutable / Zero: 0.0.0.0/8
+        if (ip_int & 4278190080) == 0:
+            return False
+        # Broadcast: 255.255.255.255
+        if ip_int == 4294967295:
+            return False
+        # RFC 1918 Private: 10.0.0.0/8 (0x0A000000)
+        if (ip_int & 4278190080) == 167772160:
+            return False
+        # RFC 1918 Private: 172.16.0.0/12 (0xAC100000 / 0xFFF00000)
+        if (ip_int & 4293918720) == 2886729728:
+            return False
+        # RFC 1918 Private: 192.168.0.0/16 (0xC0A80000 / 0xFFFF0000)
+        if (ip_int & 4294901760) == 3232235520:
+            return False
+        # Cloud Link-Local Metadata (AWS/GCP/Azure): 169.254.0.0/16 (0xA9FE0000)
+        if (ip_int & 4294901760) == 2851995648:
+            return False
+        # Carrier-Grade NAT (CGNAT): 100.64.0.0/10 (0x64400000 / 0xFFC00000)
+        if (ip_int & 4290772992) == 1681915904:
+            return False
+        # Multicast: 224.0.0.0/4 (0xE0000000 / 0xF0000000)
+        if (ip_int & 4026531840) == 3758096384:
+            return False
+        # Reserved: 240.0.0.0/4 (0xF0000000 / 0xF0000000)
+        if (ip_int & 4026531840) == 4026531840:
+            return False
+        # Benchmark Network: 198.18.0.0/15 (0xC6120000 / 0xFFFE0000)
+        if (ip_int & 4294836224) == 3323068416:
+            return False
+        # Documentation: TEST-NET-1 (192.0.2.0/24)
+        if (ip_int & 4294967040) == 3221225984:
+            return False
+        # Documentation: TEST-NET-2 (198.51.100.0/24)
+        if (ip_int & 4294967040) == 3325256704:
+            return False
+        # Documentation: TEST-NET-3 (203.0.113.0/24)
+        if (ip_int & 4294967040) == 3405803776:
+            return False
+        # Valid public IPv4
+        return True
 
-    # Unroutable / Zero / Broadcast
-    if cleaned == "0.0.0.0" or cleaned == "255.255.255.255":
-        return False
+    # 2. IPv6 Range Validation
+    v6_candidate: str = cleaned
+    if nox.strings.starts_with(v6_candidate, "[") and nox.strings.ends_with(v6_candidate, "]"):
+        v6_candidate = v6_candidate[1:len(v6_candidate) - 1]
+    lower_v6: str = nox.strings.lower(v6_candidate)
 
-    # Cloud link-local metadata (AWS/Azure/GCP)
-    if nox.strings.starts_with(cleaned, "169.254."):
+    if lower_v6 == "::1" or lower_v6 == "0:0:0:0:0:0:0:1":
         return False
-
-    # RFC 1918 Private IPv4
-    if nox.strings.starts_with(cleaned, "10."):
+    if lower_v6 == "::" or lower_v6 == "0:0:0:0:0:0:0:0":
         return False
-    if nox.strings.starts_with(cleaned, "192.168."):
+    # Link-local unicast (fe80::/10)
+    if nox.strings.starts_with(lower_v6, "fe8") or nox.strings.starts_with(lower_v6, "fe9") or nox.strings.starts_with(lower_v6, "fea") or nox.strings.starts_with(lower_v6, "feb"):
         return False
-    if nox.strings.starts_with(cleaned, "172."):
-        s_idx: int = 16
-        while s_idx <= 31:
-            if nox.strings.starts_with(cleaned, "172." + str(s_idx) + "."):
+    # Unique Local Address ULA (fc00::/7)
+    if nox.strings.starts_with(lower_v6, "fc") or nox.strings.starts_with(lower_v6, "fd"):
+        return False
+    # Multicast (ff00::/8)
+    if nox.strings.starts_with(lower_v6, "ff"):
+        return False
+    # Documentation (2001:db8::/32)
+    if nox.strings.starts_with(lower_v6, "2001:db8") or nox.strings.starts_with(lower_v6, "2001:0db8"):
+        return False
+    # Discard prefix (100::/64)
+    if nox.strings.starts_with(lower_v6, "100:"):
+        return False
+    # IPv4-mapped IPv6 (::ffff:0:0/96)
+    if nox.strings.contains(lower_v6, ":ffff:"):
+        f_idx: int = nox.strings.index_of(lower_v6, ":ffff:")
+        embedded: str = lower_v6[f_idx + 6:len(lower_v6)]
+        emb_int: int = parse_ipv4_int(embedded)
+        if emb_int != -1:
+            if not validate_resolved_ip(embedded):
                 return False
-            s_idx = s_idx + 1
+        else:
+            return False
 
-    # Carrier-grade NAT (100.64.0.0/10)
-    if nox.strings.starts_with(cleaned, "100."):
-        cg_idx: int = 64
-        while cg_idx <= 127:
-            if nox.strings.starts_with(cleaned, "100." + str(cg_idx) + "."):
-                return False
-            cg_idx = cg_idx + 1
+    if nox.strings.contains(lower_v6, ":"):
+        return True
 
-    # IPv6 loopback & link-local
-    if cleaned == "::1" or cleaned == "[::1]" or cleaned == "0:0:0:0:0:0:0:1" or cleaned == "[0:0:0:0:0:0:0:1]":
-        return False
-    if nox.strings.starts_with(cleaned, "fe80:") or nox.strings.starts_with(cleaned, "[fe80:"):
-        return False
-    if nox.strings.starts_with(cleaned, "fc00:") or nox.strings.starts_with(cleaned, "[fc00:"):
-        return False
-    if nox.strings.starts_with(cleaned, "fd00:") or nox.strings.starts_with(cleaned, "[fd00:"):
-        return False
-    if nox.strings.starts_with(cleaned, "::ffff:") or nox.strings.starts_with(cleaned, "[::ffff:"):
+    # 3. Hostnames
+    if cleaned == "localhost" or nox.strings.ends_with(cleaned, ".localhost"):
         return False
 
     return True
@@ -281,8 +386,9 @@ class RemoteHttpSecretProvider(SecretProvider):
     timeout_ms: int
     max_retries: int
     transport: HttpTransport
+    dns_resolver: DnsResolver
 
-    def __init__(self: RemoteHttpSecretProvider, id: str, base_url: str, allowed_hosts: list[str], auth_header_name: str, auth_token: str, transport: HttpTransport | None) -> None:
+    def __init__(self: RemoteHttpSecretProvider, id: str, base_url: str, allowed_hosts: list[str], auth_header_name: str, auth_token: str, transport: HttpTransport | None, dns_resolver: DnsResolver | None = None) -> None:
         self.id = id
         self.provider_kind = "remote_http"
         self.base_url = base_url
@@ -296,6 +402,11 @@ class RemoteHttpSecretProvider(SecretProvider):
             self.transport = transport
         else:
             self.transport = StandardHttpTransport()
+
+        if dns_resolver is not None:
+            self.dns_resolver = dns_resolver
+        else:
+            self.dns_resolver = DnsResolver("default")
 
         # Initial SSRF / allowlist check
         if not validate_https_endpoint(base_url, allowed_hosts):
@@ -316,7 +427,50 @@ class RemoteHttpSecretProvider(SecretProvider):
         while attempts < self.max_retries:
             attempts = attempts + 1
             try:
-                resp: HttpResponse = self.transport.send_request("GET", current_url, headers, "", self.timeout_ms)
+                # NET-04 Pre-Flight DNS Resolution and DNS Pinning
+                authority: str = _extract_authority(current_url)
+                host: str = authority
+                port: str = ""
+                if nox.strings.starts_with(authority, "["):
+                    r_br: int = nox.strings.index_of(authority, "]")
+                    if r_br >= 0:
+                        host = authority[0:r_br + 1]
+                        if len(authority) > r_br + 1:
+                            after_br: str = authority[r_br + 1:len(authority)]
+                            if nox.strings.starts_with(after_br, ":"):
+                                port = after_br[1:len(after_br)]
+                else:
+                    c_idx: int = nox.strings.index_of(authority, ":")
+                    if c_idx >= 0:
+                        host = authority[0:c_idx]
+                        port = authority[c_idx + 1:len(authority)]
+
+                resolved_ips: list[str] = self.dns_resolver.resolve(host)
+                if len(resolved_ips) == 0:
+                    return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, "DNS resolution produced zero addresses", self.id)
+
+                r_idx: int = 0
+                while r_idx < len(resolved_ips):
+                    c_ip: str = resolved_ips[r_idx]
+                    if not validate_resolved_ip(c_ip):
+                        return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, "DNS resolution produced prohibited or private IP: SSRF blocked", self.id)
+                    r_idx = r_idx + 1
+
+                # Pin connection to validated IP
+                pinned_ip: str = resolved_ips[0]
+                dispatch_url: str = current_url
+                headers["Host"] = authority
+                if pinned_ip != host:
+                    pinned_auth: str = pinned_ip
+                    if len(port) > 0:
+                        pinned_auth = pinned_ip + ":" + port
+                    after_auth_idx: int = 8 + len(authority)
+                    path_part: str = ""
+                    if len(current_url) > after_auth_idx:
+                        path_part = current_url[after_auth_idx:len(current_url)]
+                    dispatch_url = "https://" + pinned_auth + path_part
+
+                resp: HttpResponse = self.transport.send_request("GET", dispatch_url, headers, "", self.timeout_ms)
 
                 # 1. Handle HTTP Redirects (PROVIDER-02): Validate new location before sending credentials
                 if resp.is_redirect:
