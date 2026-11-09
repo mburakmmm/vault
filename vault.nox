@@ -30,8 +30,9 @@ from providers.file import FileSecretProvider
 from providers.source import SecretProviderSource
 from providers.remote_http import RemoteHttpSecretProvider, HttpTransport, MockHttpTransport, HttpResponse, validate_https_endpoint
 from reload.manager import ReloadManager, ReloadResult
+from cli.main import run_cli, parse_cli_args, CliOptions
 
-VERSION: str = "0.9.0"
+VERSION: str = "0.9.5"
 
 def version() -> str:
     return VERSION

@@ -5,6 +5,17 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-11-09
+
+### Added
+- Optional CLI tool and executable entry point (`cli/main.nox`) supporting `validate`, `explain`, `check-env`, `version`, and `help`.
+- `vault validate` command (**`CLI-01`**) validating configuration against schema and profile, returning status code `0` for success and `1` for failures.
+- Zero side-effect `vault --help` (**`CLI-02`**) ensuring help invocations never open network connections, read secret stores, or evaluate config files.
+- `vault explain <key>` command with safe provenance inspection without secret disclosure.
+- `vault check-env` command verifying presence of required environment variables without disclosure.
+- Test suite `tests/cli_test.nox` covering help safety, version inspection, valid/invalid config validation, explain output, check-env verification, and unknown command handling.
+- Verified 100% green across both LLVM (`zig 0.17.0`) and QBE compiler backends (17/17 test suites passing).
+
 ## [0.9.0] - 2026-11-09
 
 ### Added

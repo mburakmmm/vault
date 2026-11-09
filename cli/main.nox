@@ -1,0 +1,196 @@
+# VAULT — Command Line Interface
+# Module: cli.main
+
+from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
+from core.errors import ConfigError
+from profiles.overlay import is_valid_profile_name
+from schema.fields import ConfigSchema
+from nox.os import OsError
+import nox.os
+import nox.strings
+
+CLI_VERSION: str = "0.9.5"
+
+def print_help() -> None:
+    print("VAULT — Secure Configuration & Secret Management CLI")
+    print("Usage: vault <command> [options]")
+    print("")
+    print("Commands:")
+    print("  validate     Validate configuration against schema and format")
+    print("  explain      Explain configuration key provenance without secret leakage")
+    print("  check-env    Check process environment against required keys")
+    print("  version      Print vault library version")
+    print("  help         Show this help message")
+    print("")
+    print("Options:")
+    print("  --config <path>    Path to config file (.json, .toml, .yaml)")
+    print("  --profile <name>   Configuration profile (default: development)")
+    print("  --root <dir>       Allowed root directory for file confinement")
+    print("  --keys <k1,k2>     Comma-separated required keys for check-env")
+    print("  --help, -h         Show help")
+
+def print_version() -> None:
+    print("vault version " + CLI_VERSION)
+
+class CliOptions:
+    command: str
+    target_key: str
+    config_path: str
+    profile: str
+    root_dir: str
+    required_keys: list[str]
+
+    def __init__(self: CliOptions) -> None:
+        self.command = ""
+        self.target_key = ""
+        self.config_path = ""
+        self.profile = "development"
+        self.root_dir = "."
+        self.required_keys = []
+
+def parse_cli_args(args: list[str]) -> CliOptions:
+    opts: CliOptions = CliOptions()
+    if len(args) == 0:
+        opts.command = "help"
+        return opts
+
+    opts.command = args[0]
+    idx: int = 1
+    while idx < len(args):
+        arg_val: str = args[idx]
+        if arg_val == "--help" or arg_val == "-h":
+            opts.command = "help"
+            return opts
+        elif arg_val == "--version" or arg_val == "-v":
+            opts.command = "version"
+            return opts
+        elif arg_val == "--config" and idx + 1 < len(args):
+            idx = idx + 1
+            opts.config_path = args[idx]
+        elif arg_val == "--profile" and idx + 1 < len(args):
+            idx = idx + 1
+            opts.profile = args[idx]
+        elif arg_val == "--root" and idx + 1 < len(args):
+            idx = idx + 1
+            opts.root_dir = args[idx]
+        elif arg_val == "--keys" and idx + 1 < len(args):
+            idx = idx + 1
+            raw_keys: list[str] = nox.strings.split(args[idx], ",")
+            k_idx: int = 0
+            while k_idx < len(raw_keys):
+                opts.required_keys.append(nox.strings.trim(raw_keys[k_idx]))
+                k_idx = k_idx + 1
+        else:
+            if len(opts.target_key) == 0 and not nox.strings.starts_with(arg_val, "-"):
+                opts.target_key = arg_val
+        idx = idx + 1
+
+    return opts
+
+def run_cli(args: list[str]) -> int:
+    opts: CliOptions = parse_cli_args(args)
+
+    if opts.command == "help" or opts.command == "--help" or opts.command == "-h":
+        print_help()
+        return 0
+
+    if opts.command == "version" or opts.command == "--version" or opts.command == "-v":
+        print_version()
+        return 0
+
+    if opts.command == "validate":
+        if not is_valid_profile_name(opts.profile):
+            print("ERROR: invalid profile name: " + opts.profile)
+            return 1
+
+        builder: ConfigBuilder = ConfigBuilder()
+        builder.with_allowed_root(opts.root_dir)
+        builder.with_profile(opts.profile)
+
+        if len(opts.config_path) > 0:
+            if nox.strings.ends_with(opts.config_path, ".json"):
+                builder.with_json_file(opts.config_path, False)
+            elif nox.strings.ends_with(opts.config_path, ".toml"):
+                builder.with_toml_file(opts.config_path, False)
+            elif nox.strings.ends_with(opts.config_path, ".yaml") or nox.strings.ends_with(opts.config_path, ".yml"):
+                builder.with_yaml_file(opts.config_path, False)
+            else:
+                print("ERROR: unsupported config file format: " + opts.config_path)
+                return 1
+
+        try:
+            snapshot: ConfigSnapshot = builder.build()
+            print("OK: configuration is valid (version: " + snapshot.version() + ")")
+            return 0
+        except ConfigError as err:
+            print("ERROR: configuration validation failed: " + err.to_string())
+            return 1
+        except Exception:
+            print("ERROR: unexpected error during configuration validation")
+            return 1
+
+    if opts.command == "explain":
+        if len(opts.target_key) == 0:
+            print("ERROR: explain command requires a configuration key argument")
+            return 1
+
+        builder: ConfigBuilder = ConfigBuilder()
+        builder.with_allowed_root(opts.root_dir)
+        builder.with_profile(opts.profile)
+
+        if len(opts.config_path) > 0:
+            if nox.strings.ends_with(opts.config_path, ".json"):
+                builder.with_json_file(opts.config_path, False)
+            elif nox.strings.ends_with(opts.config_path, ".toml"):
+                builder.with_toml_file(opts.config_path, False)
+            elif nox.strings.ends_with(opts.config_path, ".yaml") or nox.strings.ends_with(opts.config_path, ".yml"):
+                builder.with_yaml_file(opts.config_path, False)
+
+        try:
+            snapshot: ConfigSnapshot = builder.build()
+            # explain output never includes raw secret values
+            print(snapshot.explain(opts.target_key))
+            return 0
+        except ConfigError as err:
+            print("ERROR: cannot explain key: " + err.to_string())
+            return 1
+
+    if opts.command == "check-env":
+        if len(opts.required_keys) == 0:
+            print("ERROR: check-env requires --keys <k1,k2,...>")
+            return 1
+
+        missing_keys: list[str] = []
+        k_idx: int = 0
+        while k_idx < len(opts.required_keys):
+            k_name: str = opts.required_keys[k_idx]
+            try:
+                val: str = nox.os.getenv(k_name)
+                if len(val) == 0:
+                    missing_keys.append(k_name)
+            except OsError:
+                missing_keys.append(k_name)
+            k_idx = k_idx + 1
+
+        if len(missing_keys) > 0:
+            print("ERROR: missing required environment variables: " + nox.strings.join(missing_keys, ", "))
+            return 1
+
+        print("OK: all required environment variables present")
+        return 0
+
+    print("ERROR: unknown command: '" + opts.command + "'. Run 'vault --help' for usage.")
+    return 1
+
+# Top-level executable entry point when invoked as a CLI program
+cmd_args: list[str] = []
+arg_idx: int = 1
+while arg_idx < nox.os.arg_count():
+    cmd_args.append(nox.os.arg(arg_idx))
+    arg_idx = arg_idx + 1
+
+if len(cmd_args) > 0:
+    exit_code: int = run_cli(cmd_args)
+    if exit_code != 0:
+        nox.os.exit(exit_code)

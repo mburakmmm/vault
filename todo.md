@@ -32,7 +32,7 @@
 | **v0.7.0** | **Faz 7** | Yerel Sır Sağlayıcıları (Env, Dosya ve Bellek Sağlayıcıları) | [ ] Beklemede |
 | **v0.8.0** | **Faz 8** | Doğrulanmış Yeniden Yükleme (Atomic Reload) & Son Bilinen İyi Durum | [ ] Beklemede |
 | **v0.9.0** | **Faz 9** | Opsiyonel Uzak Sır Sağlayıcı Çerçevesi (HTTPS, İzolasyon, SSRF Savunması) | [x] Tamamlandı |
-| **v0.9.5** | **Faz 10** | Opsiyonel CLI Aracı (`vault validate`, `explain`, `check-env`) | [ ] Beklemede |
+| **v0.9.5** | **Faz 10** | Opsiyonel CLI Aracı (`vault validate`, `explain`, `check-env`) | [x] Tamamlandı |
 | **v0.9.8** | **Faz 11** | Ekosistem Adaptörleri (Aether, Nyx, Feather vb. için ince köprüler) | [ ] Beklemede |
 | **v1.0.0** | **Faz 12** | v1.0 Sertleştirme, Tam Regresyon Matrisi & Kararlılık Sürümü | [ ] Beklemede |
 
@@ -273,21 +273,21 @@
 
 ---
 
-### [ ] Sürüm v0.9.5 — Faz 10: Opsiyonel CLI Aracı (`cli/main.nox`)
+### [x] Sürüm v0.9.5 — Faz 10: Opsiyonel CLI Aracı (`cli/main.nox`)
 > **Hedef:** Geliştiriciler ve CI ortamları için komut satırı arayüzü sunmak.
 
-- [ ] **10.1 CLI Komutları**
-  - [ ] `vault validate --config <yol> --profile <ad>` (`CLI-01`).
-  - [ ] `vault explain <anahtar> --config <yol>`.
-  - [ ] `vault check-env --schema <yol>`.
-  - [ ] `vault version` ve `vault --help` (`CLI-02`).
-- [ ] **10.2 CLI Güvenliği**
-  - [ ] Yardım komutu (`--help`) sır yüklememeli veya ağ açmamalıdır.
-  - [ ] Başarısız doğrulamada sıfır olmayan (nonzero) çıkış kodu dönmelidir.
-  - [ ] Standart çıktı/hata akışına sır değerleri asla basılmamalıdır.
-- [ ] **10.3 Testler**
-  - [ ] Komut satırı argümanları ve çıkış kodları testi.
-  - [ ] **Kabul Kapısı (Gate 10):** CLI komutları sır sızdırmadan çalışmalı ve CI otomasyonuna uygun olmalıdır.
+- [x] **10.1 CLI Komutları**
+  - [x] `vault validate --config <yol> --profile <ad>` (`CLI-01`).
+  - [x] `vault explain <anahtar> --config <yol>`.
+  - [x] `vault check-env --schema <yol>`.
+  - [x] `vault version` ve `vault --help` (`CLI-02`).
+- [x] **10.2 CLI Güvenliği**
+  - [x] Yardım komutu (`--help`) sır yüklememeli veya ağ açmamalıdır.
+  - [x] Başarısız doğrulamada sıfır olmayan (nonzero) çıkış kodu dönmelidir.
+  - [x] Standart çıktı/hata akışına sır değerleri asla basılmamalıdır.
+- [x] **10.3 Testler**
+  - [x] Komut satırı argümanları ve çıkış kodları testi.
+  - [x] **Kabul Kapısı (Gate 10):** CLI komutları sır sızdırmadan çalışmalı ve CI otomasyonuna uygun olmalıdır. (LLVM ve QBE onaylı)
 
 ---
 

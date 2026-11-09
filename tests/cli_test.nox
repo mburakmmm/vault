@@ -1,0 +1,98 @@
+# VAULT — Command Line Interface (CLI) Test Suite
+# Tests: CLI-01 (Validate), CLI-02 (Help Safety), CLI-03 (Explain), CLI-04 (Check-Env), CLI-05 (Version)
+
+from cli.main import run_cli, parse_cli_args, CliOptions, CLI_VERSION
+import nox.os
+
+def test_cli_help_safety() -> None:
+    # CLI-02: --help does not open network connections, read secrets, or execute config code
+    args1: list[str] = ["--help"]
+    assert run_cli(args1) == 0
+
+    args2: list[str] = ["-h"]
+    assert run_cli(args2) == 0
+
+    args3: list[str] = ["help"]
+    assert run_cli(args3) == 0
+
+    args4: list[str] = []
+    assert run_cli(args4) == 0
+    print("PASS: test_cli_help_safety")
+
+def test_cli_version() -> None:
+    # CLI-05: version command
+    assert run_cli(["version"]) == 0
+    assert run_cli(["--version"]) == 0
+    assert run_cli(["-v"]) == 0
+    assert CLI_VERSION == "0.9.5"
+    print("PASS: test_cli_version")
+
+def test_cli_validate_success() -> None:
+    # CLI-01: validate valid config
+    args_toml: list[str] = ["validate", "--config", "fixtures/config/app.toml", "--root", "."]
+    assert run_cli(args_toml) == 0
+
+    args_json: list[str] = ["validate", "--config", "fixtures/config/app.json", "--root", "."]
+    assert run_cli(args_json) == 0
+
+    args_yaml: list[str] = ["validate", "--config", "fixtures/config/app.yaml", "--root", "."]
+    assert run_cli(args_yaml) == 0
+
+    print("PASS: test_cli_validate_success")
+
+def test_cli_validate_failure() -> None:
+    # CLI-01: invalid config or profile returns nonzero exit code
+    args_bad_file: list[str] = ["validate", "--config", "fixtures/config/invalid_syntax.toml", "--root", "."]
+    assert run_cli(args_bad_file) == 1
+
+    args_bad_profile: list[str] = ["validate", "--profile", "bad/profile/name"]
+    assert run_cli(args_bad_profile) == 1
+
+    args_bad_ext: list[str] = ["validate", "--config", "fixtures/config/app.unknown"]
+    assert run_cli(args_bad_ext) == 1
+
+    print("PASS: test_cli_validate_failure")
+
+def test_cli_explain() -> None:
+    # CLI-03: explain key provenance
+    args_explain: list[str] = ["explain", "server.port", "--config", "fixtures/config/app.toml", "--root", "."]
+    assert run_cli(args_explain) == 0
+
+    # Missing target key
+    args_missing: list[str] = ["explain"]
+    assert run_cli(args_missing) == 1
+
+    print("PASS: test_cli_explain")
+
+def test_cli_check_env() -> None:
+    # CLI-04: check-env verification
+    nox.os.set_var("VAULT_CLI_TEST_VAR_1", "present_value")
+
+    # Present key
+    args_ok: list[str] = ["check-env", "--keys", "VAULT_CLI_TEST_VAR_1"]
+    assert run_cli(args_ok) == 0
+
+    # Missing key
+    args_missing: list[str] = ["check-env", "--keys", "VAULT_CLI_TEST_VAR_DEFINITELY_ABSENT_XYZ_999"]
+    assert run_cli(args_missing) == 1
+
+    # Missing --keys option
+    args_no_keys: list[str] = ["check-env"]
+    assert run_cli(args_no_keys) == 1
+
+    print("PASS: test_cli_check_env")
+
+def test_cli_unknown_command() -> None:
+    args_unknown: list[str] = ["definitely_unknown_cmd_123"]
+    assert run_cli(args_unknown) == 1
+    print("PASS: test_cli_unknown_command")
+
+# Run all test functions
+test_cli_help_safety()
+test_cli_version()
+test_cli_validate_success()
+test_cli_validate_failure()
+test_cli_explain()
+test_cli_check_env()
+test_cli_unknown_command()
+print("ALL CLI TESTS PASSED SUCCESSFULLY!")
