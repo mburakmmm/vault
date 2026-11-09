@@ -8,7 +8,7 @@ from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG
 from schema.fields import ConfigSchema
 from secrets.mark import SecretValue
 from providers.interface import SecretFetchResult, ProviderHealth
-from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host, DnsResolver, StaticDnsResolver
+from providers.remote_http import RemoteHttpSecretProvider, MockHttpTransport, StandardHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host, DnsResolver, StaticDnsResolver, SystemDnsResolver
 
 def test_ssrf_and_scheme_validation() -> None:
     allowlist: list[str] = ["vault.corp.internal"]
@@ -86,6 +86,13 @@ def test_ssrf_and_scheme_validation() -> None:
     assert not validate_resolved_ip("1.2.3.4.5")
     assert not validate_resolved_ip("1.1.1.999")
     assert not validate_resolved_ip("fe80:::1")
+    assert not validate_resolved_ip("2001:4860:::8888")
+    assert not validate_resolved_ip(":2001::1")
+    assert not validate_resolved_ip("2001::1:")
+    assert not validate_resolved_ip("2001::1::2")
+    assert not validate_resolved_ip("2001:db8::1::1")
+    assert not validate_resolved_ip("2001:4860:12345::1")
+    assert validate_resolved_ip("2001:4860::8888")
     assert not validate_resolved_ip("::g1")
     assert not validate_resolved_ip("::")
     assert not validate_resolved_ip("::1")
@@ -445,6 +452,28 @@ def test_net_04_dns_resolution_and_pinning() -> None:
 
     print("PASS: test_net_04_dns_resolution_and_pinning")
 
+def test_net_07_socket_pinning_enforcement() -> None:
+    # Under strict enforce_socket_pinning=True, if connect_ip differs from hostname,
+    # StandardHttpTransport MUST fail closed because nox.http does not expose raw socket binding!
+    transport: StandardHttpTransport = StandardHttpTransport(True)
+    failed_closed: bool = False
+    try:
+        empty_h: dict[str, str] = {}
+        transport.send_request("GET", "https://vault.corp.internal/secret", empty_h, "", 5000, "93.184.216.34", "vault.corp.internal")
+    except ConfigError as err:
+        failed_closed = True
+        assert err.code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert failed_closed, "StandardHttpTransport must fail closed when socket-level IP pinning cannot be enforced"
+    print("PASS: test_net_07_socket_pinning_enforcement")
+
+def test_system_dns_resolver_contract() -> None:
+    sys_dns: SystemDnsResolver = SystemDnsResolver()
+    # IP passthrough
+    res_ip: list[str] = sys_dns.resolve("1.1.1.1")
+    assert len(res_ip) >= 1
+    assert res_ip[0] == "1.1.1.1"
+    print("PASS: test_system_dns_resolver_contract")
+
 # Run all test functions
 test_ssrf_and_scheme_validation()
 test_hermetic_fetch_success()
@@ -455,4 +484,6 @@ test_response_size_ceiling()
 test_remote_provider_in_config_builder()
 test_key_traversal_and_injection_rejection()
 test_net_04_dns_resolution_and_pinning()
+test_net_07_socket_pinning_enforcement()
+test_system_dns_resolver_contract()
 print("ALL REMOTE HTTP PROVIDER TESTS PASSED SUCCESSFULLY!")

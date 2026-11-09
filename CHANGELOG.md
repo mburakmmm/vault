@@ -5,6 +5,30 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-11-09 (Socket-Pinning Fail-Closed Enforcement, CAS Reload Race Elimination, Strict RFC 4291 IPv6 Parser & Nanosecond Telemetry)
+
+### Fixed
+- **Socket-Pinning Fail-Closed Enforcement & System DNS Resolver (NET-07):**
+  - Added strict `enforce_socket_pinning: bool = False` capability parameter to `StandardHttpTransport`.
+  - When strict socket pinning is enforced and `connect_ip` differs from `tls_server_name`, `StandardHttpTransport` fails closed immediately with `ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, ...)` instead of silently falling back to unpinned socket connections.
+  - Implemented `SystemDnsResolver(DnsResolver)` calling host OS resolution (`nslookup`) to execute authentic A/AAAA DNS lookups and parse genuine IP addresses before pre-flight SSRF validation.
+  - Exported `SystemDnsResolver` on top-level `vault` facade.
+- **Strict RFC 4291 IPv6 Parser Hardening (NET-08):**
+  - Hardened `parse_ipv6_hextets` against malformed global IPv6 representations: strictly rejects triple colons (`2001:4860:::8888`), single leading colons (`:2001::1`), single trailing colons (`2001::1:`), multiple double colons (`2001::1::2`, `2001:db8::1::1`), empty hextet segments, and invalid block lengths.
+  - Hardened embedded IPv4 parsing logic to slice without trailing colons so `::ffff:93.184.216.34` cleanly yields 8 valid hextets.
+- **Atomic CAS Race Condition Elimination in `ReloadManager` (RELOAD-06):**
+  - In `ReloadManager.reload()`, moved retrieval of `current_pub: PublishedConfig = self._published` strictly *after* successfully acquiring the atomic CAS lock (`compare_and_swap(False, True)`).
+  - Eliminates the window where two concurrent writers reading pre-lock snapshots could compute duplicate version numbers from stale snapshot references.
+- **Multi-Writer Contention & Strict Monotonic Version Progression (TEST-05):**
+  - Updated multi-writer stress test in `tests/reload_test.nox` with distinct writer payloads (`Writer1App` on port 9001 vs `Writer2App` on port 9002).
+  - Reader tasks assert strict monotonic version non-decrease (`assert_true(v >= prev_v)`) and verify 100% of sampled snapshots reflect atomic, untorn configurations.
+- **Isolated External Package Consumer Verification (DIST-03):**
+  - Added dedicated CI steps in `.github/workflows/ci.yml` and `.github/workflows/release.yml` for Unix and Windows platforms verifying an isolated consumer project outside the repository root.
+  - Validates that consumer applications correctly import from the public `vault` facade and execute schema validation, secret protection, structural redaction, and atomic reload workflows.
+- **Microsecond / Nanosecond Statistical Benchmark Precision (PERF-05):**
+  - Corrected benchmark telemetry calculation in `tests/benchmark_test.nox` to compute exact nanoseconds per key resolution (`ns/key`) and float microseconds (`us/key`), eliminating integer floor truncation to `0 us/key`.
+  - Updated reporting description to `Statistical Microbenchmark (50 runs x 5 batches x 1000 keys = 250,000 key resolutions)`.
+
 ## [1.0.6] - 2026-11-09 (Exact 128-Bit IPv6 Parsing, TLS-Aware Transport, Truly Immutable Publication & Microsecond Telemetry)
 
 ### Fixed

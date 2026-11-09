@@ -258,18 +258,20 @@ async def concurrent_reader_task(task_id: int) -> int:
         name: str = snap.get_string("APP_NAME")
         ts: int = pub.published_at_ms
 
-        # TEST-04 Invariants:
-        # 1. Monotonic version: v must never decrease
-        if v >= prev_v:
-            prev_v = v
+        # TEST-05 Invariants:
+        # 1. Monotonic version: v must never decrease!
+        assert v >= prev_v, "Version must be non-decreasing! v=" + str(v) + " prev=" + str(prev_v)
+        prev_v = v
 
         # 2. Real timestamp must be recorded (> 0)
         assert ts > 0, "published_at_ms must be genuine timestamp"
 
         # 3. Snapshot and published version must be in 100% atomic lockstep!
-        if v == 1 and port == 8081 and name == "Version1App":
-            valid_reads = valid_reads + 1
-        elif v >= 2 and port == 9092 and name == "Version2App":
+        # Reject ANY torn combinations between writer 1 (9001, Writer1App) and writer 2 (9002, Writer2App)
+        is_v1: bool = (v == 1 and port == 8081 and name == "Version1App")
+        is_w1: bool = (v >= 2 and port == 9001 and name == "Writer1App")
+        is_w2: bool = (v >= 2 and port == 9002 and name == "Writer2App")
+        if is_v1 or is_w1 or is_w2:
             valid_reads = valid_reads + 1
 
         # Genuine cooperative fiber yield to force task context switches on single-threaded QBE & multi-threaded LLVM
@@ -278,11 +280,19 @@ async def concurrent_reader_task(task_id: int) -> int:
         i = i + 1
     return valid_reads
 
-async def concurrent_writer_task(writer_id: int) -> bool:
+async def concurrent_writer1_task() -> bool:
     t_w_y: Task[None] = spawn _noop_step()
     await t_w_y
-    mem_stress.set_string("APP_NAME", "Version2App")
-    mem_stress.set_string("PORT", "9092")
+    mem_stress.set_string("APP_NAME", "Writer1App")
+    mem_stress.set_string("PORT", "9001")
+    res: ReloadResult = mgr_stress.reload()
+    return res.success
+
+async def concurrent_writer2_task() -> bool:
+    t_w_y: Task[None] = spawn _noop_step()
+    await t_w_y
+    mem_stress.set_string("APP_NAME", "Writer2App")
+    mem_stress.set_string("PORT", "9002")
     res: ReloadResult = mgr_stress.reload()
     return res.success
 
@@ -294,11 +304,11 @@ test_consecutive_reloads_and_metrics()
 test_concurrent_reader_consistency_during_reload()
 test_reload_reentrancy_guard()
 
-# Spawn 3 concurrent reader tasks and 2 concurrent writer tasks (TEST-04)
+# Spawn 3 concurrent reader tasks and 2 distinct competing writer tasks (TEST-05)
 t_r1: Task[int] = spawn concurrent_reader_task(1)
 t_r2: Task[int] = spawn concurrent_reader_task(2)
-t_w1: Task[bool] = spawn concurrent_writer_task(1)
-t_w2: Task[bool] = spawn concurrent_writer_task(2)
+t_w1: Task[bool] = spawn concurrent_writer1_task()
+t_w2: Task[bool] = spawn concurrent_writer2_task()
 t_r3: Task[int] = spawn concurrent_reader_task(3)
 
 r1_valid: int = await t_r1

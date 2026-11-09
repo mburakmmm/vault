@@ -226,12 +226,17 @@ def test_statistical_benchmark_multirun() -> None:
     max_ms: int = times[len(times) - 1]
     avg_ms: int = total_ms // runs
 
-    # Sub-millisecond latency per key operation (microseconds)
-    p50_us_per_key: int = (p50_ms * 1000) // (batch_per_run * 1000)
-    p95_us_per_key: int = (p95_ms * 1000) // (batch_per_run * 1000)
-    p99_us_per_key: int = (p99_ms * 1000) // (batch_per_run * 1000)
+    # Sub-millisecond latency per key operation in exact nanoseconds and float microseconds
+    total_keys_per_run: int = batch_per_run * 1000
+    p50_ns: int = (p50_ms * 1000000) // total_keys_per_run
+    p95_ns: int = (p95_ms * 1000000) // total_keys_per_run
+    p99_ns: int = (p99_ms * 1000000) // total_keys_per_run
 
-    print("Statistical Microbenchmark (50 runs x 5 batches = 250,000 keys): min=" + str(min_ms) + "ms, p50=" + str(p50_ms) + "ms (" + str(p50_us_per_key) + " us/key), p90=" + str(p90_ms) + "ms, p95=" + str(p95_ms) + "ms (" + str(p95_us_per_key) + " us/key), p99=" + str(p99_ms) + "ms (" + str(p99_us_per_key) + " us/key), max=" + str(max_ms) + "ms, avg=" + str(avg_ms) + "ms")
+    p50_us_flt: float = float(p50_ns) / 1000.0
+    p95_us_flt: float = float(p95_ns) / 1000.0
+    p99_us_flt: float = float(p99_ns) / 1000.0
+
+    print("Statistical Microbenchmark (50 runs x 5 batches x 1000 keys = 250,000 key resolutions): min=" + str(min_ms) + "ms, p50=" + str(p50_ms) + "ms (" + str(p50_ns) + " ns/key | " + str(p50_us_flt) + " us/key), p90=" + str(p90_ms) + "ms, p95=" + str(p95_ms) + "ms (" + str(p95_ns) + " ns/key | " + str(p95_us_flt) + " us/key), p99=" + str(p99_ms) + "ms (" + str(p99_ns) + " ns/key | " + str(p99_us_flt) + " us/key), max=" + str(max_ms) + "ms, avg=" + str(avg_ms) + "ms")
     assert_true(p95_ms < 1000, "p95 latency must be < 1000ms, actual: " + str(p95_ms) + " ms")
     assert_true(avg_ms < 1000, "Statistical average latency must be < 1000ms, actual: " + str(avg_ms) + " ms")
 

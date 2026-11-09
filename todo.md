@@ -2,6 +2,63 @@
 
 ---
 
+## 🚀 VAULT v1.0.7 Patch Release (Completed & Verified)
+
+Addressing findings from the v1.0.6 technical review:
+
+### 🚨 P0: Network & SSRF Security — Socket-Pinning Fail-Closed & System DNS Resolution
+
+- [x] **NET-07: Socket-Pinning Fail-Closed Capability & Real OS DNS Resolution**
+  - **File:** `providers/remote_http.nox`, `vault.nox`, `tests/remote_provider_test.nox`, `docs/security.md`
+  - **Remediation:**
+    1. Added `enforce_socket_pinning: bool = False` to `StandardHttpTransport`. When True and `connect_ip` differs from `tls_server_name`, raises `ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, ...)` to fail closed instead of silently falling back to unpinned transport.
+    2. Implemented `SystemDnsResolver(DnsResolver)` calling host OS resolution (`nslookup`) to execute authentic A/AAAA DNS lookups and parse genuine IP addresses before pre-flight SSRF validation.
+    3. Exported `SystemDnsResolver` on top-level `vault` facade.
+    4. Verified fail-closed enforcement and `SystemDnsResolver` resolution contract in `tests/remote_provider_test.nox`.
+  - **Status:** Complete & Verified
+
+- [x] **NET-08: Exact RFC 4291 IPv6 Parser Hardening & Invalid Address Rejection**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Hardened `parse_ipv6_hextets` against malformed global IPv6 representations: strictly rejects triple colons (`2001:4860:::8888`), single leading colons (`:2001::1`), single trailing colons (`2001::1:`), multiple double colons (`2001::1::2`, `2001:db8::1::1`), empty hextet segments, and invalid block lengths.
+    2. Hardened embedded IPv4 parsing logic to slice without trailing colons so `::ffff:93.184.216.34` cleanly yields 8 valid hextets.
+    3. Added regression tests in `tests/remote_provider_test.nox` covering all RFC 4291 edge cases.
+  - **Status:** Complete & Verified
+
+### 🔒 P1: Concurrency & State Atomicity — CAS Race Elimination & Multi-Writer Contention
+
+- [x] **RELOAD-06: Atomic CAS Race Condition Elimination in `ReloadManager`**
+  - **File:** `reload/manager.nox`, `tests/reload_test.nox`
+  - **Remediation:**
+    1. Moved retrieval of `current_pub: PublishedConfig = self._published` strictly *after* acquiring the atomic CAS lock (`compare_and_swap(False, True)`).
+    2. Eliminates the race window where colliding writers reading pre-lock snapshots could compute duplicate version numbers from stale snapshot references.
+  - **Status:** Complete & Verified
+
+- [x] **TEST-05: Multi-Writer Contention with Distinct Payloads & Strict Monotonic Versioning**
+  - **File:** `tests/reload_test.nox`
+  - **Remediation:**
+    1. Updated multi-writer stress test with distinct writer payloads (`Writer1App` on port 9001 vs `Writer2App` on port 9002).
+    2. Reader tasks assert strict monotonic version non-decrease (`assert_true(v >= prev_v)`) and verify 100% of sampled snapshots reflect atomic, untorn configurations.
+  - **Status:** Complete & Verified
+
+- [x] **DIST-03: Real External Package Consumer Verification in CI**
+  - **File:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `tests/package_consumer_test.nox`
+  - **Remediation:**
+    1. Added dedicated CI steps in `.github/workflows/ci.yml` and `.github/workflows/release.yml` for Unix and Windows platforms verifying an isolated consumer project outside the repository root.
+    2. Validates that consumer applications correctly import from the public `vault` facade and execute schema validation, secret protection, structural redaction, and atomic reload workflows.
+  - **Status:** Complete & Verified
+
+### ⚡ P2: Microbenchmarks & Telemetry Precision
+
+- [x] **PERF-05: Nanosecond / Float Microsecond Benchmark Precision & Phrasing**
+  - **File:** `tests/benchmark_test.nox`
+  - **Remediation:**
+    1. Corrected benchmark telemetry calculation in `tests/benchmark_test.nox` to compute exact nanoseconds per key resolution (`ns/key`) and float microseconds (`us/key`), eliminating integer floor truncation to `0 us/key`.
+    2. Updated reporting description to `Statistical Microbenchmark (50 runs x 5 batches x 1000 keys = 250,000 key resolutions)`.
+  - **Status:** Complete & Verified
+
+---
+
 ## 🚀 VAULT v1.0.6 Patch Release (Completed & Verified)
 
 Addressing findings from the v1.0.5 technical review:

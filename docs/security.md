@@ -82,17 +82,20 @@ When consuming remote HTTPS secret stores:
    - `RemoteHttpSecretProvider` resolves hostnames via `DnsResolver` prior to issuing network requests.
    - If any resolved IP belongs to a prohibited or private range, the provider fails closed with `ERR_CONFIG_PROVIDER_UNAVAILABLE` before touching the network transport.
 
-5. **TLS-Aware Pinning & Upstream Standard Library Protocol (NET-05):**
+5. **TLS-Aware Pinning & Upstream Standard Library Protocol (NET-05 / NET-07):**
    - In accordance with TLS RFC specifications, replacing a URL host with an IP address breaks TLS certificate validation when certificates lack IP Subject Alternative Names (SANs).
    - VAULT maintains the authentic HTTPS URL (`https://<hostname>/<path>`) and transmits `Host: <hostname>`, while explicitly passing `connect_ip` and `tls_server_name` to `HttpTransport.send_request`.
-   - Pluggable transports and testing mocks route requests to `connect_ip` while strictly validating TLS against `tls_server_name`. Under standard `nox.http`, preserving the authentic hostname in the request URL ensures TLS SNI and certificate validation succeed without name mismatches.
+   - **Socket-Pinning Fail-Closed Enforcement (NET-07):** When strict socket pinning is configured (`enforce_socket_pinning=True`) and `connect_ip` differs from `tls_server_name`, `StandardHttpTransport` fails closed immediately with `ERR_CONFIG_PROVIDER_UNAVAILABLE` rather than silently issuing an unpinned request.
+   - **Authentic System DNS Resolution (NET-07):** `SystemDnsResolver` executes OS-level resolution (`nslookup`) to resolve genuine A/AAAA DNS records before pre-flight SSRF and CIDR evaluation.
+   - **RFC 4291 Strict IPv6 Grammar (NET-08):** Strictly rejects triple colons (`:::`, `fe80:::1`, `2001:4860:::8888`), single leading/trailing colons (`:2001::1`, `2001::1:`), multiple `::` abbreviations, empty blocks, and invalid hex ranges.
 
 ---
 
-## 6. Atomic Concurrency & Unified Immutable Publication (RELOAD-04 / RELOAD-05)
+## 6. Atomic Concurrency & Unified Immutable Publication (RELOAD-04 / RELOAD-05 / RELOAD-06)
 
-1. **Hardware-Level Atomic CAS Coordination:**
+1. **Hardware-Level Atomic CAS Coordination & Race Elimination (RELOAD-06):**
    - `ReloadManager` reload execution is guarded by `nox.atomic.new_bool(False)` utilizing `compare_and_swap(False, True)`.
+   - `current_pub: PublishedConfig = self._published` is read strictly *after* acquiring the CAS lock, eliminating the race window where concurrent writers could read a stale snapshot and compute duplicate version numbers.
    - Eliminates thread/worker race conditions during concurrent reloads. Multi-writer collisions safely return `CONFIG_RELOAD_IN_PROGRESS`.
 
 2. **Truly Immutable Publication Record (`PublishedConfig`):**

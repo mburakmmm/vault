@@ -6,6 +6,7 @@ from providers.interface import SecretProvider, SecretFetchResult, ProviderHealt
 import nox.strings
 import nox.http
 from nox.http import HttpError
+from nox.process import Command, Output
 
 MAX_REMOTE_RESPONSE_SIZE: int = 65536 # 64 KiB ceiling
 
@@ -34,10 +35,23 @@ class HttpTransport:
         return HttpResponse(500, empty_h, "base transport unimplemented", False, "")
 
 class StandardHttpTransport(HttpTransport):
-    def __init__(self: StandardHttpTransport) -> None:
+    enforce_socket_pinning: bool
+
+    def __init__(self: StandardHttpTransport, enforce_socket_pinning: bool = False) -> None:
         self.transport_name = "standard_nox_http"
+        self.enforce_socket_pinning = enforce_socket_pinning
 
     def send_request(self: StandardHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
+        # NET-07: If socket-level IP pinning is strictly required by caller policy,
+        # fail closed because nox.http stdlib does not expose raw socket binding primitives.
+        if self.enforce_socket_pinning and len(connect_ip) > 0 and len(tls_server_name) > 0:
+            if connect_ip != tls_server_name:
+                raise ConfigError(
+                    ERR_CONFIG_PROVIDER_UNAVAILABLE,
+                    url,
+                    "socket-level IP pinning is not supported by standard nox.http; use a pinning-capable transport or disable strict enforce_socket_pinning"
+                )
+
         try:
             res: nox.http.HttpResponse = nox.http.request(method, url, body, headers, timeout_ms)
             is_redir: bool = res.status == 301 or res.status == 302 or res.status == 307 or res.status == 308
@@ -133,6 +147,40 @@ class StaticDnsResolver(DnsResolver):
         res: list[str] = [host]
         return res
 
+class SystemDnsResolver(DnsResolver):
+    def __init__(self: SystemDnsResolver) -> None:
+        self.resolver_name = "system"
+
+    def resolve(self: SystemDnsResolver, host: str) -> list[str]:
+        # If host is already an IP, return directly
+        if validate_resolved_ip(host):
+            res_ip: list[str] = [host]
+            return res_ip
+
+        resolved: list[str] = []
+        try:
+            out: Output = Command("nslookup").arg(host).run()
+            if out.success():
+                lines: list[str] = nox.strings.split(out.stdout, "\n")
+                seen_name: bool = False
+                for line in lines:
+                    trimmed: str = nox.strings.trim(line)
+                    if nox.strings.starts_with(trimmed, "Name:") or nox.strings.starts_with(trimmed, "name:"):
+                        seen_name = True
+                    elif seen_name and (nox.strings.starts_with(trimmed, "Address:") or nox.strings.starts_with(trimmed, "Addresses:")):
+                        parts: list[str] = nox.strings.split(trimmed, ":")
+                        if len(parts) >= 2:
+                            cand: str = nox.strings.trim(parts[1])
+                            if len(cand) > 0 and not nox.strings.contains(cand, "#"):
+                                if cand not in resolved:
+                                    resolved.append(cand)
+        except Exception:
+            pass
+
+        if len(resolved) == 0:
+            resolved.append(host)
+        return resolved
+
 def hex_val(ch: str) -> int:
     if ch == "0":
         return 0
@@ -194,6 +242,16 @@ def parse_ipv6_hextets(addr: str) -> list[int]:
     if nox.strings.starts_with(cleaned, "[") and nox.strings.ends_with(cleaned, "]"):
         cleaned = cleaned[1:len(cleaned) - 1]
 
+    # NET-08: Reject triple or more consecutive colons (e.g. 2001:4860:::8888)
+    if nox.strings.contains(cleaned, ":::"):
+        return []
+
+    # Reject single leading or trailing colon
+    if nox.strings.starts_with(cleaned, ":") and not nox.strings.starts_with(cleaned, "::"):
+        return []
+    if nox.strings.ends_with(cleaned, ":") and not nox.strings.ends_with(cleaned, "::"):
+        return []
+
     embedded_ipv4: list[int] = []
     last_colon: int = _find_last_colon(cleaned)
     if last_colon >= 0:
@@ -201,6 +259,8 @@ def parse_ipv6_hextets(addr: str) -> list[int]:
         if nox.strings.contains(tail, "."):
             parts4: list[str] = nox.strings.split(tail, ".")
             if len(parts4) != 4:
+                return []
+            if len(parts4[0]) == 0 or len(parts4[1]) == 0 or len(parts4[2]) == 0 or len(parts4[3]) == 0:
                 return []
             if not is_all_digits(parts4[0]) or not is_all_digits(parts4[1]) or not is_all_digits(parts4[2]) or not is_all_digits(parts4[3]):
                 return []
@@ -212,7 +272,10 @@ def parse_ipv6_hextets(addr: str) -> list[int]:
                 return []
             embedded_ipv4.append((p0 << 8) | p1)
             embedded_ipv4.append((p2 << 8) | p3)
-            cleaned = cleaned[0:last_colon + 1]
+            if last_colon == 1 and nox.strings.starts_with(cleaned, "::"):
+                cleaned = "::"
+            else:
+                cleaned = cleaned[0:last_colon]
 
     c_idx1: int = nox.strings.index_of(cleaned, "::")
     has_double_colon: bool = c_idx1 >= 0
@@ -226,6 +289,8 @@ def parse_ipv6_hextets(addr: str) -> list[int]:
         left_blocks: list[int] = []
         if len(left_str) > 0:
             for part in nox.strings.split(left_str, ":"):
+                if len(part) == 0:
+                    return []
                 v: int = parse_hextet(part)
                 if v < 0:
                     return []
@@ -234,11 +299,12 @@ def parse_ipv6_hextets(addr: str) -> list[int]:
         right_blocks: list[int] = []
         if len(right_str) > 0:
             for part in nox.strings.split(right_str, ":"):
-                if len(part) > 0:
-                    v2: int = parse_hextet(part)
-                    if v2 < 0:
-                        return []
-                    right_blocks.append(v2)
+                if len(part) == 0:
+                    return []
+                v2: int = parse_hextet(part)
+                if v2 < 0:
+                    return []
+                right_blocks.append(v2)
 
         total_given: int = len(left_blocks) + len(right_blocks) + len(embedded_ipv4)
         if total_given > 7:
@@ -259,6 +325,8 @@ def parse_ipv6_hextets(addr: str) -> list[int]:
     else:
         blocks: list[int] = []
         for part in nox.strings.split(cleaned, ":"):
+            if len(part) == 0:
+                return []
             v3: int = parse_hextet(part)
             if v3 < 0:
                 return []

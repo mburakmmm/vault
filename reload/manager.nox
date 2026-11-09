@@ -94,12 +94,14 @@ class ReloadManager:
         return self._published.version
 
     def reload(self: ReloadManager) -> ReloadResult:
-        # RELOAD-03: True hardware-level Atomic Compare-And-Swap (CAS)
-        # Guarantees strictly one thread/worker can enter the reload critical section at any time!
-        current_pub: PublishedConfig = self._published
+        # RELOAD-06: Atomic CAS Lock MUST be acquired BEFORE reading current_pub
+        # Guarantees strictly one thread/worker enters the critical section,
+        # and reads the true latest published version rather than a stale pre-lock reference!
         if not self._atomic_reloading.compare_and_swap(False, True):
-            return ReloadResult(False, current_pub.version, "CONFIG_RELOAD_IN_PROGRESS", "another reload is currently in progress", current_pub.snapshot)
+            stale_pub: PublishedConfig = self._published
+            return ReloadResult(False, stale_pub.version, "CONFIG_RELOAD_IN_PROGRESS", "another reload is currently in progress", stale_pub.snapshot)
 
+        current_pub: PublishedConfig = self._published
         self.reload_count = self.reload_count + 1
         next_version_num: int = current_pub.version + 1
         self.builder.builder_version = "v" + str(next_version_num)

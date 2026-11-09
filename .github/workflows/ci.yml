@@ -110,3 +110,107 @@ jobs:
       - name: Verify External Package Consumer (DIST-02)
         run: |
           noxc run tests/package_consumer_test.nox
+
+      - name: Verify Isolated External Consumer Outside Repo - Unix (DIST-03)
+        if: ${{ !matrix.is_windows }}
+        run: |
+          ISO_DIR="$(mktemp -d)"
+          cp vault.nox "$ISO_DIR/"
+          cp -r core env schema secrets sources interpolate profiles providers reload cli "$ISO_DIR/"
+          cp nox.json "$ISO_DIR/"
+          mkdir -p "$ISO_DIR/consumer"
+          cat << 'EOF' > "$ISO_DIR/consumer/main.nox"
+          from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot, ReloadManager, PublishedConfig, MemorySource, version
+          from nox.test import assert_true, assert_eq_str, assert_eq_int
+
+          def run_consumer() -> None:
+              v: str = version()
+              print("Isolated consumer running with VAULT v" + v)
+              assert_eq_str(v, "1.0.7", "version check")
+
+              schema: ConfigSchema = ConfigSchema()
+              schema.add_string("APP_ENV", True, False, "production", False, True)
+              schema.add_int("HTTP_PORT", True, False, 8080, True, 1024, True, 65535, False)
+              schema.add_string("API_KEY", True, False, "", True, True)
+
+              mem: MemorySource = MemorySource("app_env", 1, "base", False)
+              mem.set_string("APP_ENV", "production")
+              mem.set_string("HTTP_PORT", "9090")
+              mem.set_string("API_KEY", "super_secret_token_12345")
+
+              builder: ConfigBuilder = ConfigBuilder()
+              builder.with_schema(schema)
+              builder.with_source(mem)
+
+              mgr: ReloadManager = ReloadManager(builder)
+              pub: PublishedConfig = mgr.get_published()
+              assert_eq_int(pub.version, 1, "published version 1")
+              assert_eq_int(pub.snapshot.get_int("HTTP_PORT"), 9090, "port check")
+              assert_eq_str(pub.snapshot.get_secret("API_KEY"), "super_secret_token_12345", "secret retrieval")
+
+              redacted: str = pub.snapshot.redacted_json()
+              assert_true("super_secret_token_12345" not in redacted, "secret redacted in JSON")
+              assert_true("[REDACTED]" in redacted, "redacted marker in JSON")
+
+              print("PASS: Isolated external consumer verified successfully outside repository root!")
+
+          run_consumer()
+          EOF
+          (cd "$ISO_DIR" && noxc run consumer/main.nox)
+          rm -rf "$ISO_DIR"
+
+      - name: Verify Isolated External Consumer Outside Repo - Windows (DIST-03)
+        if: matrix.is_windows
+        shell: powershell
+        run: |
+          $IsoDir = Join-Path $env:TEMP "iso_consumer_ci"
+          if (Test-Path $IsoDir) { Remove-Item -Recurse -Force $IsoDir }
+          New-Item -ItemType Directory -Force -Path $IsoDir | Out-Null
+          Copy-Item "vault.nox" -Destination $IsoDir
+          Copy-Item -Recurse "core", "env", "schema", "secrets", "sources", "interpolate", "profiles", "providers", "reload", "cli", "nox.json" -Destination $IsoDir
+          $Sub = Join-Path $IsoDir "consumer"
+          New-Item -ItemType Directory -Force -Path $Sub | Out-Null
+          @'
+          from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot, ReloadManager, PublishedConfig, MemorySource, version
+          from nox.test import assert_true, assert_eq_str, assert_eq_int
+
+          def run_consumer() -> None:
+              v: str = version()
+              print("Isolated consumer running with VAULT v" + v)
+              assert_eq_str(v, "1.0.7", "version check")
+
+              schema: ConfigSchema = ConfigSchema()
+              schema.add_string("APP_ENV", True, False, "production", False, True)
+              schema.add_int("HTTP_PORT", True, False, 8080, True, 1024, True, 65535, False)
+              schema.add_string("API_KEY", True, False, "", True, True)
+
+              mem: MemorySource = MemorySource("app_env", 1, "base", False)
+              mem.set_string("APP_ENV", "production")
+              mem.set_string("HTTP_PORT", "9090")
+              mem.set_string("API_KEY", "super_secret_token_12345")
+
+              builder: ConfigBuilder = ConfigBuilder()
+              builder.with_schema(schema)
+              builder.with_source(mem)
+
+              mgr: ReloadManager = ReloadManager(builder)
+              pub: PublishedConfig = mgr.get_published()
+              assert_eq_int(pub.version, 1, "published version 1")
+              assert_eq_int(pub.snapshot.get_int("HTTP_PORT"), 9090, "port check")
+              assert_eq_str(pub.snapshot.get_secret("API_KEY"), "super_secret_token_12345", "secret retrieval")
+
+              redacted: str = pub.snapshot.redacted_json()
+              assert_true("super_secret_token_12345" not in redacted, "secret redacted in JSON")
+              assert_true("[REDACTED]" in redacted, "redacted marker in JSON")
+
+              print("PASS: Isolated external consumer verified successfully outside repository root!")
+
+          run_consumer()
+          '@ | Set-Content -Path (Join-Path $Sub "main.nox")
+          Push-Location $IsoDir
+          try {
+              noxc run consumer/main.nox
+          } finally {
+              Pop-Location
+              Remove-Item -Recurse -Force $IsoDir
+          }
