@@ -1,0 +1,62 @@
+# VAULT — Multi-Worker Configuration Architecture Example
+# Demonstrates isolated worker configuration management with coordinated reloads.
+# In accordance with NOX shared-nothing worker architecture (ADR 0005 & CONCUR-03):
+# - Within each worker process/thread: ReloadManager publishes snapshots via Seqlock and hardware atomics.
+# - Across workers: Workers maintain isolated instances and reload upon coordinated notifications.
+
+from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot, ReloadManager, ReloadResult, MemorySource
+
+def main_worker_example() -> None:
+    print("=== VAULT Multi-Worker Configuration Architecture ===")
+
+    # 1. Define shared service schema
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("SERVICE_NAME", True, True, "WorkerService", False, True)
+    schema.add_string("DATABASE_URL", True, False, "", False, True)
+    schema.add_int("PORT", True, False, 8080, True, 1024, True, 65535, False)
+
+    # 2. Setup Worker 1 Configuration
+    src_worker1: MemorySource = MemorySource("w1_source", 5, "base", False)
+    src_worker1.set_string("SERVICE_NAME", "WorkerService")
+    src_worker1.set_string("DATABASE_URL", "postgres://db.cluster.internal:5432/primary")
+    src_worker1.set_string("PORT", "8001")
+
+    b1: ConfigBuilder = ConfigBuilder()
+    b1.with_schema(schema)
+    b1.with_source(src_worker1)
+    mgr_w1: ReloadManager = ReloadManager(b1)
+
+    # 3. Setup Worker 2 Configuration
+    src_worker2: MemorySource = MemorySource("w2_source", 5, "base", False)
+    src_worker2.set_string("SERVICE_NAME", "WorkerService")
+    src_worker2.set_string("DATABASE_URL", "postgres://db.cluster.internal:5432/primary")
+    src_worker2.set_string("PORT", "8002")
+
+    b2: ConfigBuilder = ConfigBuilder()
+    b2.with_schema(schema)
+    b2.with_source(src_worker2)
+    mgr_w2: ReloadManager = ReloadManager(b2)
+
+    # 4. Display Initial Status
+    snap1: ConfigSnapshot = mgr_w1.snapshot()
+    snap2: ConfigSnapshot = mgr_w2.snapshot()
+    print("Worker 1 port: " + str(snap1.get_int("PORT")) + " (DB: " + snap1.get_string("DATABASE_URL") + ")")
+    print("Worker 2 port: " + str(snap2.get_int("PORT")) + " (DB: " + snap2.get_string("DATABASE_URL") + ")")
+
+    # 5. Coordinated Runtime Reload (e.g. Database Failover Broadcast)
+    print("\nSimulating coordinated broadcast: updating database cluster endpoint...")
+    new_db_endpoint: str = "postgres://db.failover.internal:5432/secondary"
+    src_worker1.set_string("DATABASE_URL", new_db_endpoint)
+    src_worker2.set_string("DATABASE_URL", new_db_endpoint)
+
+    res1: ReloadResult = mgr_w1.reload()
+    res2: ReloadResult = mgr_w2.reload()
+
+    if res1.success and res2.success:
+        print("Coordinated reload succeeded across all workers:")
+        print("Worker 1 DB: " + mgr_w1.snapshot().get_string("DATABASE_URL") + " (version: v" + str(mgr_w1.get_version()) + ")")
+        print("Worker 2 DB: " + mgr_w2.snapshot().get_string("DATABASE_URL") + " (version: v" + str(mgr_w2.get_version()) + ")")
+    else:
+        print("Reload failed!")
+
+main_worker_example()

@@ -495,4 +495,151 @@ def test_seqlock_read_latency_benchmark() -> None:
 
 test_seqlock_read_latency_benchmark()
 
+# RELOAD-13: Fault-Injection & Transactional Rollback Invariant Test
+def test_seqlock_mid_publish_fault_injection_and_rollback() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, True, "RollbackApp", False, True)
+    mem_src: MemorySource = MemorySource("rollback_mem", 5, "base", False)
+    mem_src.set_string("APP_NAME", "RollbackApp_v1")
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_schema(schema)
+    b.with_source(mem_src)
+
+    mgr: ReloadManager = ReloadManager(b)
+    assert mgr.get_published().version == 1
+    assert mgr.get_atomic_version() == 1
+    assert (mgr.get_atomic_seq() & 1) == 0
+
+    # Build candidate for v2
+    mem_src.set_string("APP_NAME", "RollbackApp_v2_candidate")
+    b_cand: ConfigBuilder = ConfigBuilder()
+    b_cand.with_schema(schema)
+    b_cand.with_source(mem_src)
+    cand_snap: ConfigSnapshot = b_cand.build()
+
+    # Test fault injection at step 1 (right after seq increment), step 2 (after version store), step 3 (after pointer swap)
+    fault_step: int = 1
+    while fault_step <= 3:
+        prior_pub: PublishedConfig = mgr.get_published()
+        prior_ver: int = prior_pub.version
+        mgr.set_reloading_for_test(True)
+
+        caught: bool = False
+        try:
+            mgr.simulate_mid_publish_fault_for_test(fault_step, 99, cand_snap)
+        except ConfigError as err:
+            caught = True
+            mgr.rollback_transaction(prior_pub)
+
+        assert caught, "Simulated fault at step " + str(fault_step) + " must be caught"
+
+        # Verify RELOAD-13 Invariants after rollback:
+        # 1. Sequence counter restored to even parity
+        assert (mgr.get_atomic_seq() & 1) == 0, "Sequence must be even after rollback at step " + str(fault_step)
+        # 2. Hardware atomic version rolled back to prior version
+        assert mgr.get_atomic_version() == prior_ver, "Atomic version must rollback to " + str(prior_ver)
+        # 3. Published version rolled back to prior version
+        assert mgr.get_version() == prior_ver, "Published version must rollback to " + str(prior_ver)
+        # 4. Snapshot data wholly intact
+        assert mgr.snapshot().get_string("APP_NAME") == "RollbackApp_v1"
+        # 5. Lock released
+        assert not mgr.is_reloading, "Lock must be released after rollback"
+
+        fault_step = fault_step + 1
+
+    print("PASS: test_seqlock_mid_publish_fault_injection_and_rollback")
+
+test_seqlock_mid_publish_fault_injection_and_rollback()
+
+# RELOAD-14: Time-Bounded Seqlock Read Timeout Test
+def test_seqlock_time_bounded_timeout() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, True, "TimeoutApp", False, True)
+    mem_src: MemorySource = MemorySource("timeout_mem", 5, "base", False)
+    mem_src.set_string("APP_NAME", "TimeoutApp_v1")
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_schema(schema)
+    b.with_source(mem_src)
+
+    mgr: ReloadManager = ReloadManager(b)
+    # Set timeout to 25ms
+    mgr.seqlock_timeout_ms = 25
+    mgr.max_seqlock_retries = 1000
+
+    # Simulate ongoing write transaction
+    mgr._atomic_seq.increment()
+    assert (mgr.get_atomic_seq() & 1) != 0
+
+    t_start: int = nox.time.boot_ms()
+    timed_out: bool = False
+    try:
+        mgr.get_published()
+    except ConfigError as err:
+        assert err.code == ERR_CONFIG_CONCURRENT_READ_TIMEOUT
+        timed_out = True
+    t_elapsed: int = nox.time.boot_ms() - t_start
+
+    assert timed_out, "Reader must time out when transaction is held"
+    assert t_elapsed >= 15, "Time-bounded timeout must respect wall-clock limit, elapsed: " + str(t_elapsed) + " ms"
+
+    # Restore sequence
+    mgr._atomic_seq.increment()
+    assert (mgr.get_atomic_seq() & 1) == 0
+    assert mgr.get_published().version == 1
+
+    print("PASS: test_seqlock_time_bounded_timeout")
+
+test_seqlock_time_bounded_timeout()
+
+# CONCUR-04: Worker-Isolated Configuration Coordination
+def test_worker_isolated_config_coordination() -> None:
+    # Demonstrates the shared-nothing multi-worker architecture:
+    # Each worker thread owns an isolated ReloadManager instance,
+    # and reloads deterministically upon receiving an update event/notification.
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("CLUSTER_NODE", True, True, "node-1", False, True)
+    schema.add_int("WORKER_PORT", True, False, 8000, True, 1024, True, 65535, False)
+
+    mem_src_1: MemorySource = MemorySource("w1_src", 5, "base", False)
+    mem_src_1.set_string("CLUSTER_NODE", "node-1")
+    mem_src_1.set_string("WORKER_PORT", "8001")
+
+    mem_src_2: MemorySource = MemorySource("w2_src", 5, "base", False)
+    mem_src_2.set_string("CLUSTER_NODE", "node-2")
+    mem_src_2.set_string("WORKER_PORT", "8002")
+
+    b1: ConfigBuilder = ConfigBuilder()
+    b1.with_schema(schema)
+    b1.with_source(mem_src_1)
+
+    b2: ConfigBuilder = ConfigBuilder()
+    b2.with_schema(schema)
+    b2.with_source(mem_src_2)
+
+    mgr_w1: ReloadManager = ReloadManager(b1)
+    mgr_w2: ReloadManager = ReloadManager(b2)
+
+    # Initial isolated states
+    assert mgr_w1.snapshot().get_int("WORKER_PORT") == 8001
+    assert mgr_w2.snapshot().get_int("WORKER_PORT") == 8002
+
+    # Simulate coordinated broadcast: update CLUSTER_NODE on all workers
+    mem_src_1.set_string("CLUSTER_NODE", "node-cluster-v2")
+    mem_src_2.set_string("CLUSTER_NODE", "node-cluster-v2")
+
+    res1: ReloadResult = mgr_w1.reload()
+    res2: ReloadResult = mgr_w2.reload()
+
+    assert res1.success and res2.success
+    assert mgr_w1.snapshot().get_string("CLUSTER_NODE") == "node-cluster-v2"
+    assert mgr_w2.snapshot().get_string("CLUSTER_NODE") == "node-cluster-v2"
+    assert mgr_w1.snapshot().get_int("WORKER_PORT") == 8001
+    assert mgr_w2.snapshot().get_int("WORKER_PORT") == 8002
+
+    print("PASS: test_worker_isolated_config_coordination")
+
+test_worker_isolated_config_coordination()
+
 print("ALL RELOAD TESTS PASSED SUCCESSFULLY!")

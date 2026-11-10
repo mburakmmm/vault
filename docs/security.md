@@ -95,18 +95,19 @@ When consuming remote HTTPS secret stores:
 
 ---
 
-## 6. Atomic Concurrency & Unified Immutable Publication (RELOAD-04 / RELOAD-05 / RELOAD-06 / RELOAD-07 / RELOAD-08 / RELOAD-09 / RELOAD-10 / RELOAD-11 / RELOAD-12 / CONCUR-03)
+## 6. Atomic Concurrency & Unified Immutable Publication (RELOAD-04 / RELOAD-05 / RELOAD-06 / RELOAD-07 / RELOAD-08 / RELOAD-09 / RELOAD-10 / RELOAD-11 / RELOAD-12 / RELOAD-13 / RELOAD-14 / CONCUR-03 / CONCUR-04)
 
 1. **Hardware-Level Atomic CAS Coordination & Race Elimination (RELOAD-06 / RELOAD-08):**
    - `ReloadManager` reload execution is guarded by `nox.atomic.new_bool(False)` utilizing `compare_and_swap(False, True)`.
    - `current_pub: PublishedConfig = self._published` is read strictly *after* acquiring the CAS lock, eliminating the race window where concurrent writers could read a stale snapshot and compute duplicate version numbers.
    - Multi-worker tests verify 100% lockstep completion of all sequential reload cycles (`writer_reloads == 5`, `version == 6`) with zero torn configurations observed by reader fibers.
    - **Hardware Memory-Barrier Version Synchronization (RELOAD-09):** An `_atomic_version: AtomicInt` is maintained alongside `PublishedConfig`. `get_atomic_version() -> int` performs atomic hardware-level reads, providing cross-thread CPU cache coherence guarantees during concurrent execution.
-    - **Seqlock Concurrent Reader/Writer Barrier Protocol (RELOAD-10 / RELOAD-11 / RELOAD-12):**
+    - **Seqlock Concurrent Reader/Writer Barrier Protocol (RELOAD-10 / RELOAD-11 / RELOAD-12 / RELOAD-13 / RELOAD-14):**
       - An `_atomic_seq: AtomicInt` implements a classic seqlock write transaction sequence (odd during transition, even when stable). Readers in `get_published()`, `snapshot()`, and `current_snapshot` verify matching sequence numbers before and after pointer acquisition, guaranteeing absolute cross-thread consistency and zero torn snapshot reads.
-      - **Fail-Closed Seqlock Boundary (RELOAD-11):** If the writer transaction is held or torn read persists past `max_seqlock_retries` (default: 500 attempts), readers strictly fail closed by raising `ConfigError("CONFIG_CONCURRENT_READ_TIMEOUT")`. An unverified reference is NEVER returned to callers.
-      - **Exception Clean Invariant (RELOAD-12):** On any failure or exception in `reload()`, `_atomic_seq` is guaranteed to return to an even sequence number and `_atomic_reloading` lock is reset to `False`, preventing reader deadlock.
-      - **NOX Memory Model & Concurrency Boundaries (CONCUR-03):** Distinguishes in-worker async fibers / M:N threads (guaranteed safe by seqlock and hardware atomics) from QBE shared-nothing worker threads (where NOX limits ARC object graphs and mandates `ThreadChannel[T]`).
+      - **Fail-Closed Seqlock Boundary (RELOAD-11):** If the writer transaction is held or torn read persists past `max_seqlock_retries` (default: 1000 attempts), readers strictly fail closed by raising `ConfigError("CONFIG_CONCURRENT_READ_TIMEOUT")`. An unverified reference is NEVER returned to callers.
+      - **Hybrid Spin-Backoff & Monotonic Timeout (RELOAD-14):** Readers spin tight for 10 attempts before engaging 1ms adaptive sleep backoff bounded by `seqlock_timeout_ms` (default: 250ms monotonic clock), preventing 100% CPU lock while giving concurrent writers time to finish.
+      - **Transactional Atomic Rollback (RELOAD-13):** On any failure during candidate build or publication steps, `rollback_transaction()` restores `_atomic_version` and `_published` to prior known-good state before restoring `_atomic_seq` to even parity and releasing the CAS reload lock.
+      - **NOX Memory Model & Concurrency Boundaries (CONCUR-03 / CONCUR-04):** Distinguishes in-worker async fibers / M:N threads (guaranteed safe by seqlock and hardware atomics) from QBE shared-nothing worker threads (where NOX limits ARC object graphs and mandates `ThreadChannel[T]`, demonstrated in `examples/worker_threads.nox`).
 
 2. **Truly Immutable Publication Record (`PublishedConfig`):**
    - Version number, immutable snapshot, epoch timestamp, and reload count are encapsulated in `PublishedConfig`.

@@ -244,7 +244,7 @@ def test_statistical_benchmark_multirun() -> None:
 test_statistical_benchmark_multirun()
 print("PASS: test_statistical_benchmark_multirun")
 
-# PERF-06: Seqlock Read Latency Benchmark
+# PERF-06 & PERF-07: Comparative Seqlock Read Latency & Differential Overhead Benchmark
 def test_seqlock_read_benchmark() -> None:
     schema: ConfigSchema = ConfigSchema()
     schema.add_string("APP_NAME", True, True, "SeqlockBench", False, True)
@@ -257,22 +257,48 @@ def test_seqlock_read_benchmark() -> None:
 
     mgr: ReloadManager = ReloadManager(b)
 
-    # 100,000 uncontended seqlock reads
-    total_reads: int = 100000
-    t0: int = nox.time.now_ms()
-    i: int = 0
-    while i < total_reads:
-        pub: PublishedConfig = mgr.get_published()
-        i = i + 1
-    t1: int = nox.time.now_ms()
-    elapsed_ms: int = t1 - t0
-    if elapsed_ms == 0:
-        elapsed_ms = 1
+    # 1. Warm-up run (50,000 unmeasured reads)
+    warmup_i: int = 0
+    warmup_sum: int = 0
+    while warmup_i < 50000:
+        w_pub: PublishedConfig = mgr.get_published()
+        warmup_sum = warmup_sum + w_pub.version
+        warmup_i = warmup_i + 1
+    assert_true(warmup_sum == 50000, "Warmup checksum must match")
 
-    ns_per_read: int = (elapsed_ms * 1000000) // total_reads
-    us_per_read: float = float(ns_per_read) / 1000.0
-    print("Seqlock Benchmark (100,000 reads): total=" + str(elapsed_ms) + "ms, " + str(ns_per_read) + " ns/read (" + str(us_per_read) + " us/read)")
-    assert_true(elapsed_ms < 1000, "100,000 seqlock reads must complete under 1000ms")
+    total_reads: int = 500000
+
+    # 2. Baseline Direct Unlocked Field Read (500,000 reads) with black-hole state consumption
+    t_base_0: int = nox.time.boot_ms()
+    i_base: int = 0
+    checksum_base: int = 0
+    while i_base < total_reads:
+        pub_direct: PublishedConfig = mgr._published
+        checksum_base = checksum_base + pub_direct.version
+        i_base = i_base + 1
+    t_base_elapsed: int = nox.time.boot_ms() - t_base_0
+    assert_true(checksum_base == total_reads, "Direct read checksum must match")
+
+    # 3. Synchronized Seqlock Read Barrier (500,000 reads) with black-hole state consumption
+    t_seq_0: int = nox.time.boot_ms()
+    i_seq: int = 0
+    checksum_seq: int = 0
+    while i_seq < total_reads:
+        pub_seq: PublishedConfig = mgr.get_published()
+        checksum_seq = checksum_seq + pub_seq.version
+        i_seq = i_seq + 1
+    t_seq_elapsed: int = nox.time.boot_ms() - t_seq_0
+    assert_true(checksum_seq == total_reads, "Seqlock read checksum must match")
+
+    # 4. Accurate per-read nanoseconds and comparative overhead calculation
+    ns_direct_per_read: int = (t_base_elapsed * 1000000) // total_reads
+    ns_seqlock_per_read: int = (t_seq_elapsed * 1000000) // total_reads
+    overhead_ns: int = ns_seqlock_per_read - ns_direct_per_read
+    if overhead_ns < 0:
+        overhead_ns = 0
+
+    print("Comparative Seqlock Benchmark (500,000 reads, monotonic boot clock): direct=" + str(t_base_elapsed) + "ms (" + str(ns_direct_per_read) + " ns/read), seqlock=" + str(t_seq_elapsed) + "ms (" + str(ns_seqlock_per_read) + " ns/read), delta overhead=" + str(overhead_ns) + " ns/read")
+    assert_true(t_seq_elapsed < 2000, "500,000 seqlock reads must complete under 2000ms")
 
 test_seqlock_read_benchmark()
 print("PASS: test_seqlock_read_benchmark")

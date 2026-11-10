@@ -61,6 +61,7 @@ class ReloadManager:
     _atomic_version: AtomicInt
     _atomic_seq: AtomicInt
     max_seqlock_retries: int
+    seqlock_timeout_ms: int
 
     def __init__(self: ReloadManager, builder: ConfigBuilder) -> None:
         self.builder = builder
@@ -69,7 +70,8 @@ class ReloadManager:
         self._atomic_reloading = new_bool(False)
         self._atomic_version = new_int(1)
         self._atomic_seq = new_int(0)
-        self.max_seqlock_retries = 500
+        self.max_seqlock_retries = 1000
+        self.seqlock_timeout_ms = 250
         self.builder.builder_version = "v1"
         initial_snap: ConfigSnapshot = self.builder.build()
         now_ts: int = nox.time.now_ms()
@@ -83,25 +85,36 @@ class ReloadManager:
         self._atomic_reloading.store(reloading)
 
     def get_published(self: ReloadManager) -> PublishedConfig:
-        # RELOAD-10 & RELOAD-11: Seqlock read barrier protocol ensuring consistent, untorn publication
-        # Fail-closed: Never returns an unverified reference after retry exhaustion!
+        # RELOAD-10, RELOAD-11 & RELOAD-14: Hybrid spin-then-sleep seqlock read barrier protocol
+        # Fast path (< 10 retries): sub-microsecond tight CPU spin
+        # Contended path (>= 10 retries): 1ms adaptive sleep backoff with monotonic wall-clock timeout
         retries: int = 0
         limit: int = self.max_seqlock_retries
+        timeout_ms: int = self.seqlock_timeout_ms
+        t0: int = nox.time.boot_ms()
         while retries < limit:
             seq1: int = self._atomic_seq.load()
             if (seq1 & 1) != 0:
-                # Write transaction in progress; spin/retry
+                # Write transaction in progress; spin or backoff
                 retries = retries + 1
+                if retries > 10:
+                    if timeout_ms > 0 and (nox.time.boot_ms() - t0) >= timeout_ms:
+                        break
+                    nox.time.sleep_ms(1)
                 continue
             pub: PublishedConfig = self._published
             seq2: int = self._atomic_seq.load()
             if seq1 == seq2:
                 return pub
             retries = retries + 1
+            if retries > 10:
+                if timeout_ms > 0 and (nox.time.boot_ms() - t0) >= timeout_ms:
+                    break
+                nox.time.sleep_ms(1)
         raise ConfigError(
             ERR_CONFIG_CONCURRENT_READ_TIMEOUT,
             "published_config",
-            "seqlock read barrier timeout: concurrent write held or torn snapshot detected after " + str(limit) + " attempts"
+            "seqlock read barrier timeout: concurrent write held or torn snapshot detected after " + str(retries) + " attempts"
         )
 
     def snapshot(self: ReloadManager) -> ConfigSnapshot:
@@ -125,6 +138,36 @@ class ReloadManager:
     def get_atomic_seq(self: ReloadManager) -> int:
         # RELOAD-10: Hardware seqlock sequence counter
         return self._atomic_seq.load()
+
+    def rollback_transaction(self: ReloadManager, prior_pub: PublishedConfig) -> None:
+        # RELOAD-13: Full transactional rollback across all three seqlock publication fields
+        if (self._atomic_seq.load() & 1) != 0:
+            # 1. Rollback hardware atomic version counter
+            self._atomic_version.store(prior_pub.version)
+            # 2. Rollback active published snapshot pointer
+            self._published = prior_pub
+            # 3. Close seqlock write transaction to even parity
+            self._atomic_seq.increment()
+        # 4. Release CAS reload lock
+        self._atomic_reloading.store(False)
+
+    def simulate_mid_publish_fault_for_test(self: ReloadManager, fault_step: int, next_ver: int, candidate: ConfigSnapshot) -> None:
+        # Fault injection simulation for RELOAD-13 testing:
+        # Step 1: Open transaction
+        self._atomic_seq.increment()
+        if fault_step == 1:
+            raise ConfigError("SIMULATED_STEP1_FAULT", "publish", "simulated failure right after sequence increment")
+        # Step 2: Store version
+        self._atomic_version.store(next_ver)
+        if fault_step == 2:
+            raise ConfigError("SIMULATED_STEP2_FAULT", "publish", "simulated failure after version store")
+        # Step 3: Publish snapshot
+        now_ts: int = nox.time.now_ms()
+        self._published = PublishedConfig(next_ver, candidate, now_ts, self.reload_count)
+        if fault_step == 3:
+            raise ConfigError("SIMULATED_STEP3_FAULT", "publish", "simulated failure after pointer assign")
+        # Step 4: Close transaction
+        self._atomic_seq.increment()
 
     def reload(self: ReloadManager) -> ReloadResult:
         # RELOAD-06: Atomic CAS Lock MUST be acquired BEFORE reading current_pub
@@ -161,19 +204,15 @@ class ReloadManager:
 
         except ConfigError as err:
             # 3. Validation or load failed: retain entire previous snapshot wholly intact
-            # RELOAD-12: Ensure seqlock sequence is restored to even on failure so readers are never deadlocked
-            if (self._atomic_seq.load() & 1) != 0:
-                self._atomic_seq.increment()
+            # RELOAD-12 & RELOAD-13: Full transactional rollback across all fields
+            self.rollback_transaction(current_pub)
             self.failed_reloads = self.failed_reloads + 1
             self.builder.builder_version = "v" + str(current_pub.version)
-            self._atomic_reloading.store(False)
             return ReloadResult(False, current_pub.version, err.code, err.message, current_pub.snapshot)
 
         except Exception:
-            # RELOAD-12: Ensure seqlock sequence is restored to even on unexpected failure
-            if (self._atomic_seq.load() & 1) != 0:
-                self._atomic_seq.increment()
+            # RELOAD-12 & RELOAD-13: Full transactional rollback on unexpected failure
+            self.rollback_transaction(current_pub)
             self.failed_reloads = self.failed_reloads + 1
             self.builder.builder_version = "v" + str(current_pub.version)
-            self._atomic_reloading.store(False)
             return ReloadResult(False, current_pub.version, "CONFIG_RELOAD_ERROR", "unexpected error during reload", current_pub.snapshot)

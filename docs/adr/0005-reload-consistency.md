@@ -22,15 +22,16 @@ We adopt a **Validate-Before-Swap, Last-Known-Good** publication model:
    - No partial or half-merged state is ever published to consumers.
 4. **Reader Consistency & Immutability:**
    Published `ConfigSnapshot` instances are strictly immutable. Active callers holding a reference to an earlier snapshot continue reading valid, consistent state without data races or use-after-free hazards. Future reads through `manager.snapshot()` obtain the newly published snapshot.
-5. **Seqlock Concurrent Reader/Writer Barrier Protocol (RELOAD-10 / RELOAD-11 / RELOAD-12):**
+5. **Seqlock Concurrent Reader/Writer Barrier Protocol (RELOAD-10 / RELOAD-11 / RELOAD-12 / RELOAD-13 / RELOAD-14):**
    - An `_atomic_seq: AtomicInt` sequence counter guards the publication transition.
    - Writer transaction increments sequence to odd before updating `_atomic_version` and `_published`, and increments to even when publication completes.
    - Reader verification loop (`get_published()`, `snapshot()`, `current_snapshot`) verifies `seq1 == seq2 and (seq1 & 1) == 0`.
-   - **Fail-Closed Boundary (RELOAD-11):** If a concurrent write transaction is stalled or torn read persists past `max_seqlock_retries` (default: 500 attempts), readers fail closed by raising `ConfigError("CONFIG_CONCURRENT_READ_TIMEOUT")`. Readers never receive an unverified snapshot.
-   - **Exception Invariant (RELOAD-12):** In case of any exception during reload execution, `_atomic_seq` is guaranteed to return to an even sequence number and CAS lock is released.
-6. **NOX Concurrency & Memory Model Boundaries (CONCUR-03):**
+   - **Fail-Closed Boundary (RELOAD-11):** If a concurrent write transaction is stalled or torn read persists past `max_seqlock_retries` (default: 1000 attempts), readers fail closed by raising `ConfigError("CONFIG_CONCURRENT_READ_TIMEOUT")`. Readers never receive an unverified snapshot.
+   - **Hybrid Spin-Backoff & Monotonic Timeout (RELOAD-14):** Readers employ a sub-microsecond tight spin for the first 10 attempts, transitioning to 1ms sleep backoff bounded by `seqlock_timeout_ms` (default: 250ms monotonic clock).
+   - **Full Transactional Rollback (RELOAD-13):** In case of any mid-publish exception or failure, `rollback_transaction()` restores `_atomic_version` and `_published` to prior known-good state before restoring `_atomic_seq` to even parity and releasing the CAS lock.
+6. **NOX Concurrency & Memory Model Boundaries (CONCUR-03 / CONCUR-04):**
    - **Within Worker Process:** Async fibers and M:N work-stealing tasks safely access published snapshots via atomic hardware CAS and seqlock barriers.
-   - **Across Shared-Nothing Workers:** As defined by NOX runtime architecture (QBE shared-nothing heaps), cross-worker communication utilizes primitive message channels (`ThreadChannel[T]`) or independent `ReloadManager` instances per worker.
+   - **Across Shared-Nothing Workers:** As defined by NOX runtime architecture (QBE shared-nothing heaps), cross-worker communication utilizes primitive message channels (`ThreadChannel[T]`) or independent `ReloadManager` instances per worker (demonstrated in `examples/worker_threads.nox`).
 
 ## Consequences
 
