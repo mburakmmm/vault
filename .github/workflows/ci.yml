@@ -126,7 +126,7 @@ jobs:
           def run_consumer() -> None:
               v: str = version()
               print("Isolated consumer running with VAULT v" + v)
-              assert_eq_str(v, "1.0.10", "version check")
+              assert_eq_str(v, "1.0.11", "version check")
 
               schema: ConfigSchema = ConfigSchema()
               schema.add_string("APP_ENV", True, False, "production", False, True)
@@ -177,7 +177,7 @@ jobs:
           def run_consumer() -> None:
               v: str = version()
               print("Isolated consumer running with VAULT v" + v)
-              assert_eq_str(v, "1.0.10", "version check")
+              assert_eq_str(v, "1.0.11", "version check")
 
               schema: ConfigSchema = ConfigSchema()
               schema.add_string("APP_ENV", True, False, "production", False, True)

@@ -59,6 +59,7 @@ class ReloadManager:
     failed_reloads: int
     _atomic_reloading: AtomicBool
     _atomic_version: AtomicInt
+    _atomic_seq: AtomicInt
 
     def __init__(self: ReloadManager, builder: ConfigBuilder) -> None:
         self.builder = builder
@@ -66,6 +67,7 @@ class ReloadManager:
         self.failed_reloads = 0
         self._atomic_reloading = new_bool(False)
         self._atomic_version = new_int(1)
+        self._atomic_seq = new_int(0)
         self.builder.builder_version = "v1"
         initial_snap: ConfigSnapshot = self.builder.build()
         now_ts: int = nox.time.now_ms()
@@ -79,25 +81,42 @@ class ReloadManager:
         self._atomic_reloading.store(reloading)
 
     def get_published(self: ReloadManager) -> PublishedConfig:
+        # RELOAD-10: Seqlock read barrier protocol ensuring consistent, untorn publication
+        retries: int = 0
+        while retries < 100:
+            seq1: int = self._atomic_seq.load()
+            if (seq1 & 1) != 0:
+                # Write transaction in progress; spin/retry
+                retries = retries + 1
+                continue
+            pub: PublishedConfig = self._published
+            seq2: int = self._atomic_seq.load()
+            if seq1 == seq2:
+                return pub
+            retries = retries + 1
         return self._published
 
     def snapshot(self: ReloadManager) -> ConfigSnapshot:
-        return self._published.snapshot
+        return self.get_published().snapshot
 
     @property
     def current_snapshot(self: ReloadManager) -> ConfigSnapshot:
-        return self._published.snapshot
+        return self.get_published().snapshot
 
     @property
     def version(self: ReloadManager) -> int:
-        return self._published.version
+        return self.get_published().version
 
     def get_version(self: ReloadManager) -> int:
-        return self._published.version
+        return self.get_published().version
 
     def get_atomic_version(self: ReloadManager) -> int:
         # RELOAD-09: Hardware memory-barrier synchronized atomic integer read
         return self._atomic_version.load()
+
+    def get_atomic_seq(self: ReloadManager) -> int:
+        # RELOAD-10: Hardware seqlock sequence counter
+        return self._atomic_seq.load()
 
     def reload(self: ReloadManager) -> ReloadResult:
         # RELOAD-06: Atomic CAS Lock MUST be acquired BEFORE reading current_pub
@@ -116,12 +135,20 @@ class ReloadManager:
             # 1. Build complete candidate snapshot off to the side
             candidate: ConfigSnapshot = self.builder.build()
 
-            # 2. RELOAD-05 & RELOAD-09: Publish new snapshot and version atomically with real timestamp and hardware barrier
+            # 2. RELOAD-05, RELOAD-09 & RELOAD-10: Seqlock publication barrier protocol
             now_reload: int = nox.time.now_ms()
             new_pub: PublishedConfig = PublishedConfig(next_version_num, candidate, now_reload, self.reload_count)
-            self._published = new_pub  # Atomic reference assignment
-            self._atomic_version.store(next_version_num) # Hardware-coherent atomic version barrier
-            self._atomic_reloading.store(False)  # Atomic release barrier
+
+            # Step 1: Open seqlock write transaction (sequence becomes odd)
+            self._atomic_seq.increment()
+            # Step 2: Update hardware atomic version counter
+            self._atomic_version.store(next_version_num)
+            # Step 3: Publish new snapshot pointer atomically
+            self._published = new_pub
+            # Step 4: Close seqlock write transaction (sequence becomes even)
+            self._atomic_seq.increment()
+            # Step 5: Release CAS reload lock
+            self._atomic_reloading.store(False)
             return ReloadResult(True, new_pub.version, "", "", new_pub.snapshot)
 
         except ConfigError as err:

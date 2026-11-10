@@ -98,7 +98,7 @@ class StrictPinnedHttpTransport(HttpTransport):
         raise ConfigError(
             ERR_CONFIG_PROVIDER_UNAVAILABLE,
             url,
-            "strict socket-level IP pinning required but not supported by standard nox.http runtime; connection rejected fail-closed"
+            "strict socket-level IP pinning and TLS server name verification required but not supported by standard nox.http runtime; connection rejected fail-closed"
         )
 
 class MockHttpTransport(HttpTransport):
@@ -579,18 +579,50 @@ def is_valid_hostname(host: str) -> bool:
     return True
 
 class DnsResolutionResult:
-    addresses: list[str]
-    success: bool
-    error_code: str
-    error_message: str
-    exit_code: int
+    _addresses: list[str]
+    _success: bool
+    _error_code: str
+    _error_message: str
+    _exit_code: int
 
     def __init__(self: DnsResolutionResult, addresses: list[str], success: bool, error_code: str = "", error_message: str = "", exit_code: int = 0) -> None:
-        self.addresses = addresses
-        self.success = success
-        self.error_code = error_code
-        self.error_message = error_message
-        self.exit_code = exit_code
+        # NET-18: Immutable value object with defensive copy on construction
+        copy_list: list[str] = []
+        idx: int = 0
+        while idx < len(addresses):
+            copy_list.append(addresses[idx])
+            idx = idx + 1
+        self._addresses = copy_list
+        self._success = success
+        self._error_code = error_code
+        self._error_message = error_message
+        self._exit_code = exit_code
+
+    @property
+    def addresses(self: DnsResolutionResult) -> list[str]:
+        # Return defensive copy to guarantee immutability against caller modification
+        res: list[str] = []
+        idx: int = 0
+        while idx < len(self._addresses):
+            res.append(self._addresses[idx])
+            idx = idx + 1
+        return res
+
+    @property
+    def success(self: DnsResolutionResult) -> bool:
+        return self._success
+
+    @property
+    def error_code(self: DnsResolutionResult) -> str:
+        return self._error_code
+
+    @property
+    def error_message(self: DnsResolutionResult) -> str:
+        return self._error_message
+
+    @property
+    def exit_code(self: DnsResolutionResult) -> int:
+        return self._exit_code
 
 class DnsResolver:
     resolver_name: str
@@ -634,7 +666,14 @@ class StaticDnsResolver(DnsResolver):
             res_lit: list[str] = [host]
             return DnsResolutionResult(res_lit, True, "", "", 0)
         if host in self.records:
-            return DnsResolutionResult(self.records[host], True, "", "", 0)
+            # NET-18: Defensive copy of stored records to preserve immutability
+            rec: list[str] = self.records[host]
+            copy_rec: list[str] = []
+            idx: int = 0
+            while idx < len(rec):
+                copy_rec.append(rec[idx])
+                idx = idx + 1
+            return DnsResolutionResult(copy_rec, True, "", "", 0)
         res_empty: list[str] = []
         return DnsResolutionResult(res_empty, False, "STATIC_DNS_UNMAPPED_HOST", "no static mapping for host", 0)
 
@@ -825,7 +864,8 @@ class RemoteHttpSecretProvider(SecretProvider):
         self.strict_pinning = strict_pinning
 
         if transport is not None:
-            if strict_pinning and not transport.supports_socket_pinning():
+            # NET-17: In strict mode, BOTH socket IP pinning AND TLS server name verification are mandatory
+            if strict_pinning and (not transport.supports_socket_pinning() or not transport.supports_tls_server_name()):
                 self.transport = StrictPinnedHttpTransport()
             else:
                 self.transport = transport

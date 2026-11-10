@@ -2,6 +2,51 @@
 
 ---
 
+## 🚀 VAULT v1.0.11 Patch Release (Completed & Verified)
+
+Addressing findings from the v1.0.10 technical review:
+
+### 🚨 P0 / P1: Network & SSRF Security — Dual Capability Checking & Truly Immutable DnsResolutionResult
+
+- [x] **NET-17: Dual Socket-Pinning & TLS Server Name Capability Verification**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. In `RemoteHttpSecretProvider.__init__`, upgraded strict pinning validation to enforce *both* `supports_socket_pinning() == True` AND `supports_tls_server_name() == True`.
+    2. Transports lacking either capability are strictly intercepted and replaced with `StrictPinnedHttpTransport()`, preventing TLS spoofing and DNS rebinding in strict mode.
+    3. Expanded tests in `tests/remote_provider_test.nox` covering transports with missing TLS capability and missing pinning capability.
+  - **Status:** Complete & Verified
+
+- [x] **NET-18: Truly Immutable `DnsResolutionResult` with Defensive Copying**
+  - **File:** `providers/remote_http.nox`, `tests/remote_provider_test.nox`
+  - **Remediation:**
+    1. Encapsulated all fields of `DnsResolutionResult` behind read-only `@property` getters (`addresses`, `success`, `error_code`, `error_message`, `exit_code`).
+    2. Applied defensive copying of the address array on construction and upon property access, preventing caller mutations from affecting stored results.
+    3. Added defensive copying to `StaticDnsResolver.resolve_detailed()` to prevent mutation of static DNS records through returned resolution objects.
+    4. Verified immutability against direct list modification in `tests/remote_provider_test.nox`.
+  - **Status:** Complete & Verified
+
+### 🔒 P0: Concurrency & State Atomicity — Seqlock Read/Write Barrier Protocol
+
+- [x] **RELOAD-10: Seqlock Concurrent Publication & Memory-Barrier Protocol**
+  - **File:** `reload/manager.nox`, `tests/reload_test.nox`
+  - **Remediation:**
+    1. Implemented a lockless Seqlock read/write barrier protocol in `ReloadManager` using `_atomic_seq: AtomicInt`.
+    2. Writers open transaction with an odd sequence counter, update `_atomic_version` and `_published`, and close with an even sequence counter.
+    3. Readers in `get_published()`, `snapshot()`, and `current_snapshot` verify matching sequence numbers before and after pointer acquisition, guaranteeing absolute cross-thread consistency and eliminating race conditions.
+    4. Added `get_atomic_seq() -> int` and tested even sequence consistency in multi-worker reload tests (`tests/reload_test.nox`).
+  - **Status:** Complete & Verified
+
+### 📦 P2: Packaging & Integration Consistency
+
+- [x] **DIST-07: Manifest, Facade & Multi-Platform CI Release Consistency (v1.0.11)**
+  - **File:** `nox.json`, `vault.nox`, `cli/main.nox`, `tests/cli_test.nox`, `tests/package_consumer_test.nox`, `tests/package_test.nox`, `tests/regression_matrix_test.nox`, `README.md`, `CHANGELOG.md`, `docs/security.md`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+  - **Remediation:**
+    1. Bumped versions to `1.0.11` across all files, workflows, and tests.
+    2. Verified compiler type-checks, local QBE and LLVM test suites, and remote CI workflows.
+  - **Status:** Complete & Verified
+
+---
+
 ## 🚀 VAULT v1.0.10 Patch Release (Completed & Verified)
 
 Addressing findings from the v1.0.9 technical review:

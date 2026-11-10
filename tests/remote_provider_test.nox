@@ -634,29 +634,43 @@ def test_net_15_transport_capabilities() -> None:
     assert not mock_unpinned.supports_socket_pinning()
     assert not mock_unpinned.supports_tls_server_name()
 
-    # 3. RemoteHttpSecretProvider with strict_pinning intercepts non-pinning transports
+    # 3. RemoteHttpSecretProvider with strict_pinning intercepts non-pinning or non-TLS transports
     allowlist: list[str] = ["vault.corp.internal"]
-    prov_intercept: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
-        "p_strict",
+
+    # 3a. Lacks socket pinning
+    prov_no_pin: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "p_no_pin",
         "https://vault.corp.internal/v1/secrets",
         allowlist,
         "Authorization",
         "tok_123",
-        mock_unpinned, # Has supports_socket_pinning() == False
+        MockHttpTransport(False, True),
         make_test_dns(),
         True # strict_pinning=True
     )
-    # Replaced with StrictPinnedHttpTransport
-    assert prov_intercept.transport.transport_name == "strict_socket_pinned"
+    assert prov_no_pin.transport.transport_name == "strict_socket_pinned"
 
-    # 4. Pinning-capable transport is preserved when strict_pinning is enabled
+    # 3b. Lacks TLS server name verification (NET-17)
+    prov_no_tls: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "p_no_tls",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "Authorization",
+        "tok_123",
+        MockHttpTransport(True, False),
+        make_test_dns(),
+        True # strict_pinning=True
+    )
+    assert prov_no_tls.transport.transport_name == "strict_socket_pinned"
+
+    # 4. Pinning AND TLS-capable transport is preserved when strict_pinning is enabled
     prov_keep: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
         "p_keep",
         "https://vault.corp.internal/v1/secrets",
         allowlist,
         "Authorization",
         "tok_123",
-        mock_pinning, # Has supports_socket_pinning() == True
+        mock_pinning, # Has supports_socket_pinning() == True AND supports_tls_server_name() == True
         make_test_dns(),
         True
     )
@@ -689,6 +703,16 @@ def test_net_16_dns_resolution_result() -> None:
     assert r4.success
     assert len(r4.addresses) == 1
     assert r4.addresses[0] == "198.51.100.50"
+
+    # 4. NET-18: Immutability & Defensive Copy verification
+    raw_list: list[str] = ["203.0.113.10", "203.0.113.11"]
+    r_immut: DnsResolutionResult = DnsResolutionResult(raw_list, True, "", "", 0)
+    raw_list.append("203.0.113.12")
+    assert len(r_immut.addresses) == 2, "Mutating input list must not alter DnsResolutionResult"
+
+    ret_list: list[str] = r_immut.addresses
+    ret_list.append("203.0.113.99")
+    assert len(r_immut.addresses) == 2, "Mutating returned addresses list must not alter DnsResolutionResult"
 
     print("PASS: test_net_16_dns_resolution_result")
 

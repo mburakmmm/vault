@@ -398,6 +398,9 @@ assert w3_count == 100
 assert writer_reloads == 5, "All 5 sequential reload cycles must succeed; got " + str(writer_reloads)
 assert mgr_worker.get_version() == 6, "Final published version must reach exact target version 6; got " + str(mgr_worker.get_version())
 assert mgr_worker.get_atomic_version() == 6, "Final atomic hardware version must reach exact target version 6; got " + str(mgr_worker.get_atomic_version())
+# RELOAD-10: Seqlock sequence must be completely even (closed transactions) and reflect exact 5 published writes
+assert (mgr_worker.get_atomic_seq() & 1) == 0, "Seqlock sequence must be even when no transaction is open"
+assert mgr_worker.get_atomic_seq() == 10, "Seqlock sequence must advance exactly 2 increments per reload transaction (5 x 2 = 10)"
 final_snap: ConfigSnapshot = mgr_worker.snapshot()
 assert final_snap.get_string("SERVICE_NAME") == "WorkerApp_v6"
 assert final_snap.get_int("WORKER_PORT") == 8006

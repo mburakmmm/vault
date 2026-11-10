@@ -5,6 +5,21 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.11] - 2026-11-10 (Full TLS & Pinning Capability Verification, Truly Immutable DnsResolutionResult & Seqlock Publication Protocol)
+
+### Fixed
+- **Dual Socket-Pinning & TLS Server Name Capability Verification (NET-17):**
+  - Updated `RemoteHttpSecretProvider.__init__` to mandate *both* `supports_socket_pinning() == True` AND `supports_tls_server_name() == True` when `strict_pinning=True` is enabled.
+  - Transports lacking either capability are strictly intercepted and routed to `StrictPinnedHttpTransport()`, preventing TLS man-in-the-middle or unpinned DNS rebinding vulnerabilities.
+- **Truly Immutable DnsResolutionResult with Defensive Copying (NET-18):**
+  - Encapsulated `_addresses: list[str]`, `_success: bool`, `_error_code: str`, `_error_message: str`, and `_exit_code: int` behind read-only `@property` accessors.
+  - Applied defensive copying upon construction and upon `addresses` property access, guaranteeing that mutations to input arrays or returned collections cannot contaminate internal resolution state.
+  - Added defensive copying to `StaticDnsResolver.resolve_detailed()` to safeguard internal static record lists.
+- **Seqlock Concurrent Publication & Memory-Barrier Protocol (RELOAD-10):**
+  - Implemented a lockless Seqlock read/write barrier protocol in `ReloadManager` using `_atomic_seq: AtomicInt`.
+  - Writers increment the sequence counter to an odd value during snapshot and atomic version swaps, closing the transaction with an even sequence upon publication.
+  - Readers in `get_published()`, `snapshot()`, and `current_snapshot` follow the seqlock verification protocol, eliminating any possible window of observing torn state or version mismatch during concurrent execution.
+
 ## [1.0.10] - 2026-11-09 (Capability-Based Transport Pinning, Immutable DnsResolutionResult, Atomic Hardware Memory Barrier & Clean Registry Simulation)
 
 ### Added
