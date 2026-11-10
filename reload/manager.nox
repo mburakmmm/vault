@@ -3,7 +3,7 @@
 
 from core.builder import ConfigBuilder
 from core.snapshot import ConfigSnapshot
-from core.errors import ConfigError
+from core.errors import ConfigError, ERR_CONFIG_CONCURRENT_READ_TIMEOUT
 from nox.atomic import new_bool, AtomicBool, new_int, AtomicInt
 import nox.time
 
@@ -60,6 +60,7 @@ class ReloadManager:
     _atomic_reloading: AtomicBool
     _atomic_version: AtomicInt
     _atomic_seq: AtomicInt
+    max_seqlock_retries: int
 
     def __init__(self: ReloadManager, builder: ConfigBuilder) -> None:
         self.builder = builder
@@ -68,6 +69,7 @@ class ReloadManager:
         self._atomic_reloading = new_bool(False)
         self._atomic_version = new_int(1)
         self._atomic_seq = new_int(0)
+        self.max_seqlock_retries = 500
         self.builder.builder_version = "v1"
         initial_snap: ConfigSnapshot = self.builder.build()
         now_ts: int = nox.time.now_ms()
@@ -81,9 +83,11 @@ class ReloadManager:
         self._atomic_reloading.store(reloading)
 
     def get_published(self: ReloadManager) -> PublishedConfig:
-        # RELOAD-10: Seqlock read barrier protocol ensuring consistent, untorn publication
+        # RELOAD-10 & RELOAD-11: Seqlock read barrier protocol ensuring consistent, untorn publication
+        # Fail-closed: Never returns an unverified reference after retry exhaustion!
         retries: int = 0
-        while retries < 100:
+        limit: int = self.max_seqlock_retries
+        while retries < limit:
             seq1: int = self._atomic_seq.load()
             if (seq1 & 1) != 0:
                 # Write transaction in progress; spin/retry
@@ -94,7 +98,11 @@ class ReloadManager:
             if seq1 == seq2:
                 return pub
             retries = retries + 1
-        return self._published
+        raise ConfigError(
+            ERR_CONFIG_CONCURRENT_READ_TIMEOUT,
+            "published_config",
+            "seqlock read barrier timeout: concurrent write held or torn snapshot detected after " + str(limit) + " attempts"
+        )
 
     def snapshot(self: ReloadManager) -> ConfigSnapshot:
         return self.get_published().snapshot
@@ -153,12 +161,18 @@ class ReloadManager:
 
         except ConfigError as err:
             # 3. Validation or load failed: retain entire previous snapshot wholly intact
+            # RELOAD-12: Ensure seqlock sequence is restored to even on failure so readers are never deadlocked
+            if (self._atomic_seq.load() & 1) != 0:
+                self._atomic_seq.increment()
             self.failed_reloads = self.failed_reloads + 1
             self.builder.builder_version = "v" + str(current_pub.version)
             self._atomic_reloading.store(False)
             return ReloadResult(False, current_pub.version, err.code, err.message, current_pub.snapshot)
 
         except Exception:
+            # RELOAD-12: Ensure seqlock sequence is restored to even on unexpected failure
+            if (self._atomic_seq.load() & 1) != 0:
+                self._atomic_seq.increment()
             self.failed_reloads = self.failed_reloads + 1
             self.builder.builder_version = "v" + str(current_pub.version)
             self._atomic_reloading.store(False)

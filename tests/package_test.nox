@@ -3,6 +3,6 @@ from nox.test import assert_eq_str, assert_true
 import vault
 
 v: str = vault.version()
-assert_eq_str(v, "1.0.11", "vault version mismatch")
+assert_eq_str(v, "1.0.12", "vault version mismatch")
 
 print("PACKAGE_TEST: PASS")

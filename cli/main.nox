@@ -10,7 +10,7 @@ from nox.os import OsError
 import nox.os
 import nox.strings
 
-CLI_VERSION: str = "1.0.11"
+CLI_VERSION: str = "1.0.12"
 
 def print_help() -> None:
     print("VAULT — Secure Configuration & Secret Management CLI")

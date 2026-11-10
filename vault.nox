@@ -11,7 +11,7 @@ from sources.json import JsonSource
 from sources.toml import TomlSource
 from sources.yaml import YamlSource
 from core.types import ConfigValue, ConfigEntry, SourceOrigin, make_string, make_int, make_float, make_bool, make_null, make_missing, make_array, make_object, PRESENCE_MISSING, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
-from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_DUPLICATE_KEY, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SIZE_LIMIT, ERR_CONFIG_INTERPOLATION_CYCLE, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_PROVIDER_UNAVAILABLE
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_DUPLICATE_KEY, ERR_CONFIG_SOURCE_UNAVAILABLE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SIZE_LIMIT, ERR_CONFIG_INTERPOLATION_CYCLE, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG_CONCURRENT_READ_TIMEOUT
 from core.merge import merge_sources
 from core.snapshot import ConfigSnapshot
 from core.builder import ConfigBuilder
@@ -32,7 +32,7 @@ from providers.remote_http import RemoteHttpSecretProvider, HttpTransport, Stand
 from reload.manager import ReloadManager, ReloadResult, PublishedConfig
 from cli.main import run_cli, parse_cli_args, CliOptions
 
-VERSION: str = "1.0.11"
+VERSION: str = "1.0.12"
 
 def version() -> str:
     return VERSION

@@ -3,7 +3,7 @@
 
 from core.builder import ConfigBuilder
 from core.snapshot import ConfigSnapshot
-from core.errors import ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_INTERPOLATION_CYCLE
+from core.errors import ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_INTERPOLATION_CYCLE, ERR_CONFIG_CONCURRENT_READ_TIMEOUT, ConfigError
 from schema.fields import ConfigSchema
 from sources.memory import MemorySource
 from reload.manager import ReloadManager, ReloadResult, PublishedConfig
@@ -100,6 +100,9 @@ def test_reload_01_invalid_config_rollback() -> None:
     # 3. APP_NAME was NOT partially updated to "CorruptCandidate"
     assert manager.snapshot().get_string("APP_NAME") == "GoodApp"
     assert manager.snapshot().version() == "v1"
+    # RELOAD-12: Sequence counter must be even and CAS lock released
+    assert (manager.get_atomic_seq() & 1) == 0
+    assert not manager.is_reloading
     print("PASS: test_reload_01_invalid_config_rollback")
 
 def test_reload_interpolation_cycle_rollback() -> None:
@@ -125,6 +128,9 @@ def test_reload_interpolation_cycle_rollback() -> None:
     assert manager.get_version() == 1
     # Previous good snapshot intact
     assert manager.snapshot().get_string("DB_URL") == "postgres://db.internal:5432/db"
+    # RELOAD-12: Sequence counter must be even and CAS lock released
+    assert (manager.get_atomic_seq() & 1) == 0
+    assert not manager.is_reloading
     print("PASS: test_reload_interpolation_cycle_rollback")
 
 def test_consecutive_reloads_and_metrics() -> None:
@@ -405,5 +411,88 @@ final_snap: ConfigSnapshot = mgr_worker.snapshot()
 assert final_snap.get_string("SERVICE_NAME") == "WorkerApp_v6"
 assert final_snap.get_int("WORKER_PORT") == 8006
 print("PASS: test_worker_thread_snapshot_publication_safety")
+
+# RELOAD-11: Deterministic Seqlock Fail-Closed & Mid-Write Interception Test
+def test_seqlock_fail_closed_on_odd_sequence() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, True, "SeqlockApp", False, True)
+    mem_src: MemorySource = MemorySource("seqlock_mem", 5, "base", False)
+    mem_src.set_string("APP_NAME", "SeqlockApp_v1")
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_schema(schema)
+    b.with_source(mem_src)
+
+    mgr: ReloadManager = ReloadManager(b)
+    assert mgr.get_published().version == 1
+    assert mgr.get_atomic_seq() == 0
+
+    # 1. Artificially enter writer transaction (sequence becomes odd)
+    mgr._atomic_seq.increment()
+    assert (mgr.get_atomic_seq() & 1) != 0
+
+    # 2. Set max_seqlock_retries to small count for deterministic timeout test
+    mgr.max_seqlock_retries = 10
+
+    # 3. Attempting to read during open transaction MUST fail closed and raise ConfigError
+    timeout_occurred: bool = False
+    try:
+        mgr.get_published()
+    except ConfigError as err:
+        assert err.code == ERR_CONFIG_CONCURRENT_READ_TIMEOUT
+        timeout_occurred = True
+
+    assert timeout_occurred, "Reader must fail closed with ERR_CONFIG_CONCURRENT_READ_TIMEOUT when writer transaction is held"
+
+    # Also test snapshot() method fails closed
+    snap_timeout: bool = False
+    try:
+        mgr.snapshot()
+    except ConfigError as err:
+        assert err.code == ERR_CONFIG_CONCURRENT_READ_TIMEOUT
+        snap_timeout = True
+
+    assert snap_timeout, "snapshot() must also fail closed with ERR_CONFIG_CONCURRENT_READ_TIMEOUT"
+
+    # 4. Close transaction (sequence becomes even)
+    mgr._atomic_seq.increment()
+    assert (mgr.get_atomic_seq() & 1) == 0
+
+    # 5. Reader must now immediately succeed without error
+    pub: PublishedConfig = mgr.get_published()
+    assert pub.version == 1
+    assert pub.snapshot.get_string("APP_NAME") == "SeqlockApp_v1"
+
+    print("PASS: test_seqlock_fail_closed_on_odd_sequence")
+
+test_seqlock_fail_closed_on_odd_sequence()
+
+# PERF-06: Seqlock Read Latency Microbenchmark
+def test_seqlock_read_latency_benchmark() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, True, "BenchApp", False, True)
+    mem_src: MemorySource = MemorySource("bench_mem", 5, "base", False)
+    mem_src.set_string("APP_NAME", "BenchApp_v1")
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_schema(schema)
+    b.with_source(mem_src)
+
+    mgr: ReloadManager = ReloadManager(b)
+
+    # Measure 10,000 uncontended seqlock reads
+    t0: int = nox.time.now_ms()
+    i: int = 0
+    while i < 10000:
+        pub: PublishedConfig = mgr.get_published()
+        i = i + 1
+    t1: int = nox.time.now_ms()
+    elapsed_ms: int = t1 - t0
+    # 10,000 reads in under 500ms (typically < 10ms, < 1 us/read)
+    assert elapsed_ms < 500, "10,000 seqlock reads took too long: " + str(elapsed_ms) + " ms"
+    print("Seqlock read benchmark: 10,000 reads completed in " + str(elapsed_ms) + " ms")
+    print("PASS: test_seqlock_read_latency_benchmark")
+
+test_seqlock_read_latency_benchmark()
 
 print("ALL RELOAD TESTS PASSED SUCCESSFULLY!")

@@ -124,7 +124,7 @@ def test_regression_fail_closed_and_atomic_reload() -> None:
 
 def test_regression_package_facade_and_version() -> None:
     # Verify top-level facade and stable version definition
-    assert vault.version() == "1.0.11"
+    assert vault.version() == "1.0.12"
     print("PASS: test_regression_package_facade_and_version")
 
 # Run all regression scenario matrix tests

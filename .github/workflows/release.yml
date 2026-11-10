@@ -9,7 +9,7 @@ on:
       tag:
         description: 'Tag to release (e.g. v1.0.6)'
         required: true
-        default: 'v1.0.11'
+        default: 'v1.0.12'
 
 concurrency:
   group: release-${{ github.ref }}
@@ -125,7 +125,7 @@ jobs:
           def run_consumer() -> None:
               v: str = version()
               print("Isolated consumer running with VAULT v" + v)
-              assert_eq_str(v, "1.0.11", "version check")
+              assert_eq_str(v, "1.0.12", "version check")
 
               schema: ConfigSchema = ConfigSchema()
               schema.add_string("APP_ENV", True, False, "production", False, True)
@@ -176,7 +176,7 @@ jobs:
           def run_consumer() -> None:
               v: str = version()
               print("Isolated consumer running with VAULT v" + v)
-              assert_eq_str(v, "1.0.11", "version check")
+              assert_eq_str(v, "1.0.12", "version check")
 
               schema: ConfigSchema = ConfigSchema()
               schema.add_string("APP_ENV", True, False, "production", False, True)

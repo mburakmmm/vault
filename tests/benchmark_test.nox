@@ -6,6 +6,7 @@ from nox.test import assert_true, assert_eq_str, assert_eq_int
 from nox.fs import write_string, remove_file, exists
 import nox.time
 from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot
+from reload.manager import ReloadManager, PublishedConfig
 from sources.memory import MemorySource
 
 def test_large_scale_benchmark_1000_keys() -> None:
@@ -242,3 +243,36 @@ def test_statistical_benchmark_multirun() -> None:
 
 test_statistical_benchmark_multirun()
 print("PASS: test_statistical_benchmark_multirun")
+
+# PERF-06: Seqlock Read Latency Benchmark
+def test_seqlock_read_benchmark() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, True, "SeqlockBench", False, True)
+    mem_src: MemorySource = MemorySource("bench_mem", 5, "base", False)
+    mem_src.set_string("APP_NAME", "SeqlockBench_v1")
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_schema(schema)
+    b.with_source(mem_src)
+
+    mgr: ReloadManager = ReloadManager(b)
+
+    # 100,000 uncontended seqlock reads
+    total_reads: int = 100000
+    t0: int = nox.time.now_ms()
+    i: int = 0
+    while i < total_reads:
+        pub: PublishedConfig = mgr.get_published()
+        i = i + 1
+    t1: int = nox.time.now_ms()
+    elapsed_ms: int = t1 - t0
+    if elapsed_ms == 0:
+        elapsed_ms = 1
+
+    ns_per_read: int = (elapsed_ms * 1000000) // total_reads
+    us_per_read: float = float(ns_per_read) / 1000.0
+    print("Seqlock Benchmark (100,000 reads): total=" + str(elapsed_ms) + "ms, " + str(ns_per_read) + " ns/read (" + str(us_per_read) + " us/read)")
+    assert_true(elapsed_ms < 1000, "100,000 seqlock reads must complete under 1000ms")
+
+test_seqlock_read_benchmark()
+print("PASS: test_seqlock_read_benchmark")
