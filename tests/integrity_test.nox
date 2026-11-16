@@ -1,0 +1,117 @@
+# VAULT — Cryptographic Integrity, BLAKE3 & Ed25519 Signed Config Tests
+# Powered by NOX v2.1.70 (blake3, sha3_256) and v2.1.154 (nox.ed25519).
+
+from nox.test import assert_true, assert_eq_str, assert_eq_int
+from nox.fs import write_string, remove_file, exists
+from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot, ConfigError, SignedConfigSource, ERR_CONFIG_SIGNATURE_INVALID, compute_blake3_hex, compute_sha3_256_hex, verify_payload_blake3, verify_payload_ed25519, require_valid_ed25519, publisher_key_fingerprint, run_cli
+
+# RFC 8032 public dummy test vector (zero real secrets)
+RFC_PUB_HEX: str = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+RFC_SIG_EMPTY: str = "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+
+JSON_PAYLOAD: str = "{\"service\":\"vault_signed\",\"port\":8443}\n"
+JSON_SIG: str = "1735453a79473c8543d8171058a4df3e27629bc4f9ed43e4627f50c175260f7e4bfc04bd2c104d5147bcca2e4cb36bd2adbc2870a5bb545f22c59ff29ef60002"
+
+TOML_PAYLOAD: str = "service = \"vault_signed\"\nport = 8443\n"
+TOML_SIG: str = "515b262b05f8a426f650b7776f1cf2adfe76771fc87d8c0ef7dfdd78b198db3eb238a2ff326bb423ee63d20b5dbf759d8e6d445b3b234468f2cd44146dfca901"
+
+ENV_PAYLOAD: str = "SIGNED_KEY=verified_secret_value\nSIGNED_PORT=8443\n"
+ENV_SIG: str = "26226039e3214a970bb5223941de8ebe08b0aa621e121acb267887e26a9a09afa38ac095d361027b3a3103c3b641a1236d36df2dc25d338dc57f9281b9f69404"
+
+def test_blake3_and_sha3_verification() -> None:
+    b3: str = compute_blake3_hex(JSON_PAYLOAD)
+    s3: str = compute_sha3_256_hex(JSON_PAYLOAD)
+    assert_eq_int(len(b3), 64, "blake3 hex len")
+    assert_eq_int(len(s3), 64, "sha3_256 hex len")
+    assert_true(verify_payload_blake3(JSON_PAYLOAD, b3), "blake3 verification passes")
+    assert_true(not verify_payload_blake3(JSON_PAYLOAD + " ", b3), "tampered blake3 fails")
+    assert_true(not verify_payload_blake3(JSON_PAYLOAD, "bad"), "short digest fails")
+    print("PASS: test_blake3_and_sha3_verification")
+
+def test_ed25519_verification_and_fingerprint() -> None:
+    assert_true(verify_payload_ed25519("", RFC_PUB_HEX, RFC_SIG_EMPTY), "RFC 8032 empty msg")
+    assert_true(not verify_payload_ed25519("tampered", RFC_PUB_HEX, RFC_SIG_EMPTY), "tampered msg fails")
+    fp: str = publisher_key_fingerprint(RFC_PUB_HEX)
+    assert_eq_str(fp, "21fe31dfa154a261626bf854046fd227", "ed25519 fingerprint")
+
+    bad_caught: bool = False
+    try:
+        require_valid_ed25519(JSON_PAYLOAD, RFC_PUB_HEX, "0" * 128, "config.json")
+    except ConfigError as err:
+        bad_caught = True
+        assert_eq_str(err.code, ERR_CONFIG_SIGNATURE_INVALID, "signature invalid error code")
+    assert_true(bad_caught, "require_valid_ed25519 must fail closed")
+    print("PASS: test_ed25519_verification_and_fingerprint")
+
+def test_signed_config_sources_json_toml_dotenv() -> None:
+    p_json: str = "fixtures/config/temp_signed.json"
+    p_toml: str = "fixtures/config/temp_signed.toml"
+    p_env: str = "fixtures/dotenv/temp_signed.env"
+    p_bad: str = "fixtures/config/temp_tampered.json"
+
+    write_string(p_json, JSON_PAYLOAD)
+    write_string(p_toml, TOML_PAYLOAD)
+    write_string(p_env, ENV_PAYLOAD)
+    # Intentionally syntactically malformed JSON with invalid signature: MUST fail signature check BEFORE JSON parsing!
+    write_string(p_bad, "{not_valid_json_or_signature!!!")
+
+    try:
+        # 1. Signed JSON via ConfigBuilder
+        b_j: ConfigBuilder = ConfigBuilder()
+        b_j.with_allowed_root("fixtures")
+        b_j.with_signed_file(p_json, "json", RFC_PUB_HEX, JSON_SIG, False)
+        snap_j: ConfigSnapshot = b_j.build()
+        assert_eq_str(snap_j.get_string("service"), "vault_signed", "signed json string")
+        assert_eq_int(snap_j.get_int("port"), 8443, "signed json int")
+
+        # 2. Signed TOML via ConfigBuilder
+        b_t: ConfigBuilder = ConfigBuilder()
+        b_t.with_allowed_root("fixtures")
+        b_t.with_signed_file(p_toml, "toml", RFC_PUB_HEX, TOML_SIG, False)
+        snap_t: ConfigSnapshot = b_t.build()
+        assert_eq_str(snap_t.get_string("service"), "vault_signed", "signed toml string")
+        assert_eq_int(snap_t.get_int("port"), 8443, "signed toml int")
+
+        # 3. Signed Dotenv with secret masking
+        schema_env: ConfigSchema = ConfigSchema()
+        schema_env.add_string("SIGNED_KEY", True, False, "", True, True)
+        schema_env.add_int("SIGNED_PORT", True, False, 0, True, 1, True, 65535, False)
+        b_e: ConfigBuilder = ConfigBuilder()
+        b_e.with_allowed_root("fixtures")
+        b_e.with_schema(schema_env)
+        b_e.with_signed_file(p_env, "dotenv", RFC_PUB_HEX, ENV_SIG, False)
+        snap_e: ConfigSnapshot = b_e.build()
+        assert_eq_str(snap_e.get_secret("SIGNED_KEY"), "verified_secret_value", "signed dotenv secret")
+        assert_eq_int(snap_e.get_int("SIGNED_PORT"), 8443, "signed dotenv int")
+
+        # 4. Tampered file fails with ERR_CONFIG_SIGNATURE_INVALID BEFORE JSON parse error!
+        sig_failed: bool = False
+        try:
+            b_bad: ConfigBuilder = ConfigBuilder()
+            b_bad.with_allowed_root("fixtures")
+            b_bad.with_signed_file(p_bad, "json", RFC_PUB_HEX, JSON_SIG, False)
+            b_bad.build()
+        except ConfigError as err_sig:
+            sig_failed = True
+            assert_eq_str(err_sig.code, ERR_CONFIG_SIGNATURE_INVALID, "must fail signature check before parsing")
+        assert_true(sig_failed, "tampered signed file must reject fail-closed")
+
+        # 5. CLI verify-ed25519 valid & tampered
+        assert_eq_int(run_cli(["validate", "--config=" + p_json, "--root=.", "--verify-ed25519=" + RFC_PUB_HEX, "--sig=" + JSON_SIG]), 0, "CLI signed valid passes")
+        assert_eq_int(run_cli(["validate", "--config=" + p_bad, "--root=.", "--verify-ed25519=" + RFC_PUB_HEX, "--sig=" + JSON_SIG]), 1, "CLI signed tampered fails")
+    finally:
+        if exists(p_json):
+            remove_file(p_json)
+        if exists(p_toml):
+            remove_file(p_toml)
+        if exists(p_env):
+            remove_file(p_env)
+        if exists(p_bad):
+            remove_file(p_bad)
+
+    print("PASS: test_signed_config_sources_json_toml_dotenv")
+
+test_blake3_and_sha3_verification()
+test_ed25519_verification_and_fingerprint()
+test_signed_config_sources_json_toml_dotenv()
+print("ALL INTEGRITY & SIGNED CONFIG TESTS PASSED!")

@@ -3,7 +3,8 @@
 
 from nox.test import assert_eq_str, assert_eq_int, assert_true
 from core.types import ConfigEntry, ConfigValue, make_string, make_int, make_null
-from core.errors import ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_SECRET_SOURCE_DENIED
+from core.errors import ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_FORMAT_VIOLATION
+from core.builder import ConfigBuilder
 from core.merge import merge_sources
 from sources.interface import ConfigSource
 from sources.memory import MemorySource
@@ -141,5 +142,71 @@ assert_true(not report_bad_def.is_valid, "invalid schema default must fail valid
 assert_eq_int(len(report_bad_def.diagnostics), 1, "1 diagnostic for bad default")
 assert_eq_str(report_bad_def.diagnostics[0].key, "SERVICE_PORT", "bad default key")
 assert_eq_str(report_bad_def.diagnostics[0].code, ERR_CONFIG_OUT_OF_RANGE, "bad default code out of range")
+
+# -------------------------------------------------------------------------
+# Test 6: Length Bounds, Allowed Choices, Regex Pattern & Semantic Formats
+# -------------------------------------------------------------------------
+schema_rules: ConfigSchema = ConfigSchema()
+schema_rules.add_string("ENV_TIER", True, False, "", False, True)
+schema_rules.set_choices("ENV_TIER", ["dev", "staging", "prod"])
+
+schema_rules.add_string("SERVICE_CODE", True, False, "", False, True)
+schema_rules.set_length_bounds("SERVICE_CODE", True, 3, True, 12)
+schema_rules.set_pattern("SERVICE_CODE", "^[a-z][a-z0-9_]+$")
+
+schema_rules.add_string("ADMIN_EMAIL", True, False, "", False, True)
+schema_rules.set_format("ADMIN_EMAIL", "email")
+
+schema_rules.add_string("TENANT_ID", True, False, "", False, True)
+schema_rules.set_format("TENANT_ID", "uuid")
+
+schema_rules.add_string("VAULT_ADDR", True, False, "", False, True)
+schema_rules.set_format("VAULT_ADDR", "https_url")
+
+schema_rules.add_string("BIND_IP", True, False, "", False, True)
+schema_rules.set_format("BIND_IP", "ipv4")
+
+schema_rules.add_string("API_SECRET_TOKEN", True, False, "", True, True)
+schema_rules.set_length_bounds("API_SECRET_TOKEN", True, 16, False, 0)
+
+# Valid payload
+src_ok: MemorySource = MemorySource("rules_ok", 2, "base", False)
+src_ok.set_string("ENV_TIER", "prod")
+src_ok.set_string("SERVICE_CODE", "vault_core1")
+src_ok.set_string("ADMIN_EMAIL", "secops@example.com")
+src_ok.set_string("TENANT_ID", "550e8400-e29b-41d4-a716-446655440000")
+src_ok.set_string("VAULT_ADDR", "https://kms.example.com/v1")
+src_ok.set_string("BIND_IP", "10.20.30.40")
+src_ok.set_string("API_SECRET_TOKEN", "very_long_secret_key_123456")
+
+b_rules_ok: ConfigBuilder = ConfigBuilder()
+b_rules_ok.with_schema(schema_rules)
+b_rules_ok.with_source(src_ok)
+rep_ok: ValidationReport = b_rules_ok.validate_report()
+assert_true(rep_ok.is_valid, "valid constrained schema must pass")
+assert_eq_int(rep_ok.error_count(), 0, "zero errors expected")
+
+# Invalid payload violating every rule + secret length without leaking secret
+src_bad: MemorySource = MemorySource("rules_bad", 2, "base", False)
+src_bad.set_string("ENV_TIER", "qa")
+src_bad.set_string("SERVICE_CODE", "X")
+src_bad.set_string("ADMIN_EMAIL", "not-an-email")
+src_bad.set_string("TENANT_ID", "not-uuid")
+src_bad.set_string("VAULT_ADDR", "http://insecure.example.com")
+src_bad.set_string("BIND_IP", "999.1.2.3")
+src_bad.set_string("API_SECRET_TOKEN", "SHORT_SEC_999")
+
+b_rules_bad: ConfigBuilder = ConfigBuilder()
+b_rules_bad.with_schema(schema_rules)
+b_rules_bad.with_source(src_bad)
+rep_bad: ValidationReport = b_rules_bad.validate_report()
+assert_true(not rep_bad.is_valid, "invalid constrained fields must fail")
+assert_true(rep_bad.error_count() >= 7, "expected at least 7 aggregated diagnostics, got " + str(rep_bad.error_count()))
+
+# Ensure secret value is NEVER disclosed in diagnostics!
+d_i: int = 0
+while d_i < len(rep_bad.diagnostics):
+    assert_true("SHORT_SEC_999" not in rep_bad.diagnostics[d_i].to_string(), "secret value leaked in diagnostic!")
+    d_i = d_i + 1
 
 print("SCHEMA_TEST: ALL PASS")

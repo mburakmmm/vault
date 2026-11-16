@@ -1,0 +1,107 @@
+# VAULT — Opt-In JSON5 / Relaxed JSONC / Ultra-Fast JSON Source
+# Module: sources.json5 (Hosted platforms: macOS, Linux, Windows via NOX v2.1.173 nox.yyjson)
+# Note: Intentionally NOT re-exported from vault.nox so core VAULT remains portable
+# to WebAssembly, mobile, freestanding, and no-noxclibs profiles.
+
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, make_null, make_bool, make_int, make_float, make_string, make_array, make_object, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
+from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR
+from sources.interface import ConfigSource
+from sources.files import read_bounded_file
+from nox.yyjson import YyValue, YyjsonError
+import nox.yyjson
+
+JSON_MODE_STRICT: int = 0
+JSON_MODE_RELAXED: int = 1
+JSON_MODE_JSON5: int = 2
+
+def _yy_to_config_value(yv: YyValue) -> ConfigValue:
+    if nox.yyjson.is_null(yv):
+        return make_null()
+    if nox.yyjson.is_bool(yv):
+        return make_bool(nox.yyjson.as_bool(yv))
+    if nox.yyjson.is_number(yv):
+        if nox.yyjson.is_integer(yv):
+            try:
+                exact_i: int = nox.yyjson.as_int(yv)
+                return make_int(exact_i)
+            except YyjsonError:
+                return make_float(nox.yyjson.as_number(yv))
+        return make_float(nox.yyjson.as_number(yv))
+    if nox.yyjson.is_string(yv):
+        return make_string(nox.yyjson.as_string(yv))
+    if nox.yyjson.is_array(yv):
+        arr: list[ConfigValue] = []
+        n: int = nox.yyjson.array_len(yv)
+        i: int = 0
+        while i < n:
+            arr.append(_yy_to_config_value(nox.yyjson.array_get(yv, i)))
+            i = i + 1
+        return make_array(arr)
+    if nox.yyjson.is_object(yv):
+        obj: dict[str, ConfigValue] = {}
+        on: int = nox.yyjson.object_len(yv)
+        j: int = 0
+        while j < on:
+            k: str = nox.yyjson.object_key(yv, j)
+            obj[k] = _yy_to_config_value(nox.yyjson.object_value(yv, j))
+            j = j + 1
+        return make_object(obj)
+    return make_null()
+
+class Json5Source(ConfigSource):
+    path: str
+    allowed_root: str
+    optional: bool
+    parse_mode: int
+
+    def __init__(self: Json5Source, path: str, allowed_root: str, optional: bool, rank: int, profile: str, parse_mode: int = 2) -> None:
+        self.id = path
+        self.kind = "json5" if parse_mode == JSON_MODE_JSON5 else ("jsonc" if parse_mode == JSON_MODE_RELAXED else "yyjson")
+        self.rank = rank
+        self.profile = profile
+        self.path = path
+        self.allowed_root = allowed_root
+        self.optional = optional
+        self.parse_mode = parse_mode
+
+    def set_allowed_root(self: Json5Source, root: str) -> None:
+        self.allowed_root = root
+
+    def load(self: Json5Source) -> list[ConfigEntry]:
+        content: str = read_bounded_file(self.path, self.allowed_root, self.optional)
+        entries: list[ConfigEntry] = []
+        if len(content) == 0 and self.optional:
+            return entries
+
+        yv: YyValue | None = None
+        try:
+            if self.parse_mode == JSON_MODE_STRICT:
+                yv = nox.yyjson.parse(content)
+            elif self.parse_mode == JSON_MODE_RELAXED:
+                yv = nox.yyjson.parse_relaxed(content)
+            else:
+                yv = nox.yyjson.parse_json5(content)
+        except YyjsonError:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "invalid JSON5/JSONC syntax")
+
+        if yv is None or not nox.yyjson.is_object(yv):
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root JSON5 entity must be an object")
+
+        i: int = 0
+        n_keys: int = nox.yyjson.object_len(yv)
+        while i < n_keys:
+            k: str = nox.yyjson.object_key(yv, i)
+            child_yv: YyValue = nox.yyjson.object_value(yv, i)
+            cv: ConfigValue = _yy_to_config_value(child_yv)
+
+            presence: int = PRESENCE_SUPPLIED
+            if cv.kind == 1:
+                presence = PRESENCE_NULL
+            elif cv.kind == 2 and len(cv.s) == 0:
+                presence = PRESENCE_EMPTY
+
+            origin: SourceOrigin = SourceOrigin(self.path, self.kind, self.profile, self.rank)
+            entries.append(ConfigEntry(k, cv, presence, origin, False, False))
+            i = i + 1
+
+        return entries

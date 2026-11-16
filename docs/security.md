@@ -26,6 +26,7 @@ This document outlines the security architecture, threat mitigations, and formal
 VAULT enforces **structural AST-level redaction** as the primary security layer, supplemented by string-level sentinel pattern scanning:
 
 1. **Tagging:** Every secret field declared in schema or fetched via `SecretProvider` is tagged with `is_secret = true`.
+   - **Secret Override Latch (`MERGE-SEC-01`):** `core/merge.nox` monotonically preserves `is_secret = old_e.is_secret or e.is_secret` across both nested container merges and scalar/array overrides, preventing high-precedence non-secret sources from downgrading secret redaction when no schema overrides it.
 2. **Taint Propagation:** During `${KEY}` resolution, the dependency graph tracks secret ancestors. If any ancestor is secret, the descendant is automatically tainted.
 3. **Safe Serialization (`snapshot.redacted_json()`):** During serialization, any key where `is_secret == true` outputs `"[REDACTED]"`.
 4. **Non-Sensitive Provenance (`snapshot.explain(key)`):** Diagnostics output winning rank, source kind, and profile, but **never** the secret value.
@@ -117,3 +118,17 @@ When consuming remote HTTPS secret stores:
 
 3. **Cooperative Fiber Scheduling:**
    - Async reload routines yield cooperatively via `spawn` and `await`, ensuring genuine task interleaving across both single-threaded cooperative (QBE) and parallel multi-core (LLVM) execution environments.
+
+4. **Lock-Free Cross-Worker Broadcast (`SharedConfigBus` via `nox.atomic.AtomicRef`):**
+   - When coordinating configuration across isolated OS worker threads (`nox.thread.start`), `SharedConfigBus.publish_redacted_snapshot()` strictly serializes `snap.redacted_json()` so plaintext secrets are never placed in shared IPC byte cells by default.
+
+---
+
+## 7. Cryptographic Integrity & Non-Secret Fingerprinting (SEC-08 / CRYPTO-01)
+
+1. **Fail-Closed Pre-Parse Signature Verification (`SignedConfigSource` / `nox.ed25519`):**
+   - `SignedConfigSource` verifies detached Ed25519 signatures over raw configuration bytes *before* invoking JSON, TOML, YAML, or `.env` parsers (`ERR_CONFIG_SIGNATURE_INVALID`), preventing parser-level exploits or untrusted config injection.
+2. **Non-Secret Content Versioning (`ConfigSnapshot.content_hash()`):**
+   - `content_hash()` computes a 64-char hex BLAKE3 digest exclusively over `redacted_json()`. Because secrets are substituted with `"[REDACTED]"` before hashing, `content_hash()` creates zero plaintext-digest or secret-length side-channel leakage.
+3. **Cryptographic vs Non-Cryptographic Boundary:**
+   - Security attestation always uses `secrets/integrity.nox` (`nox.ed25519`, `nox.crypto.blake3`, `nox.crypto.sha3_256`, `nox.crypto.constant_time_eq`). Opt-in `sources/fast_hash.nox` (`nox.xxhash.xxh3_128_hex`) is restricted exclusively to local file dirty-checking.

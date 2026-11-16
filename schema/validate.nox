@@ -1,12 +1,16 @@
 # VAULT — Aggregate Safe Validation Engine
 # Module: schema.validate
 
-from core.types import ConfigEntry, ConfigValue, SourceOrigin, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, PRESENCE_MISSING, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
-from core.errors import ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_SECRET_SOURCE_DENIED
+from core.types import ConfigEntry, ConfigValue, SourceOrigin, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, VAL_ARRAY, PRESENCE_MISSING, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
+from core.errors import ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_OUT_OF_RANGE, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_FORMAT_VIOLATION, ERR_CONFIG_PARSE_ERROR
 from core.snapshot import ConfigSnapshot
 from schema.fields import ConfigSchema, Field, FIELD_TYPE_STRING, FIELD_TYPE_INT, FIELD_TYPE_FLOAT, FIELD_TYPE_BOOL, FIELD_TYPE_STRING_LIST, FIELD_TYPE_OBJECT
 from schema.coerce import coerce_value, CoerceResult
+from nox.regex import RegexError
+from nox.url import UrlError, URL
 import nox.strings
+import nox.regex
+import nox.url
 
 class SafeConfigDiagnostic:
     code: str
@@ -97,6 +101,145 @@ def populate_schema_defaults(entries: dict[str, ConfigEntry], schema: ConfigSche
                 entries[k].is_secret = True
         idx = idx + 1
 
+def _is_hex_byte(b: int) -> bool:
+    return (b >= 48 and b <= 57) or (b >= 97 and b <= 102) or (b >= 65 and b <= 70)
+
+def _is_valid_uuid(s: str) -> bool:
+    if nox.strings.byte_len(s) != 36:
+        return False
+    i: int = 0
+    while i < 36:
+        b: int = nox.strings.byte_at(s, i)
+        if i == 8 or i == 13 or i == 18 or i == 23:
+            if b != 45:
+                return False
+        else:
+            if not _is_hex_byte(b):
+                return False
+        i = i + 1
+    return True
+
+def _is_valid_email(s: str) -> bool:
+    if nox.strings.contains(s, " ") or nox.strings.contains(s, "\t"):
+        return False
+    parts: list[str] = nox.strings.split(s, "@")
+    if len(parts) != 2:
+        return False
+    local_p: str = parts[0]
+    domain_p: str = parts[1]
+    if len(local_p) == 0 or len(domain_p) < 3:
+        return False
+    dot_i: int = nox.strings.index_of(domain_p, ".")
+    if dot_i <= 0 or nox.strings.ends_with(domain_p, "."):
+        return False
+    return True
+
+def _is_valid_ipv4(s: str) -> bool:
+    parts: list[str] = nox.strings.split(s, ".")
+    if len(parts) != 4:
+        return False
+    idx: int = 0
+    while idx < 4:
+        p: str = parts[idx]
+        if len(p) == 0 or len(p) > 3:
+            return False
+        c_i: int = 0
+        while c_i < len(p):
+            ch: str = p[c_i]
+            if ch < "0" or ch > "9":
+                return False
+            c_i = c_i + 1
+        try:
+            oct_val: int = int(p)
+            if oct_val < 0 or oct_val > 255:
+                return False
+        except Exception:
+            return False
+        idx = idx + 1
+    return True
+
+def _is_valid_url(s: str, require_https: bool) -> bool:
+    if len(s) == 0 or nox.strings.contains(s, " "):
+        return False
+    try:
+        u: URL = nox.url.parse(s)
+        if len(u.host) == 0:
+            return False
+        if require_https:
+            return nox.strings.eq_ignore_case(u.scheme, "https")
+        return len(u.scheme) > 0
+    except UrlError:
+        return False
+
+def _check_string_constraints(f: Field, k: str, t_name: str, sv: str) -> list[SafeConfigDiagnostic]:
+    out: list[SafeConfigDiagnostic] = []
+    if f.non_blank and len(nox.strings.trim(sv)) == 0:
+        out.append(SafeConfigDiagnostic(ERR_CONFIG_EMPTY_NOT_ALLOWED, k, t_name, "non_blank", "whitespace-only value not allowed"))
+    if f.has_min_len and len(sv) < f.min_len:
+        out.append(SafeConfigDiagnostic(ERR_CONFIG_OUT_OF_RANGE, k, t_name, "min_len", "string length is below minimum bound (" + str(f.min_len) + ")"))
+    if f.has_max_len and len(sv) > f.max_len:
+        out.append(SafeConfigDiagnostic(ERR_CONFIG_OUT_OF_RANGE, k, t_name, "max_len", "string length exceeds maximum bound (" + str(f.max_len) + ")"))
+    if len(f.allowed_choices) > 0:
+        found: bool = False
+        c_idx: int = 0
+        while c_idx < len(f.allowed_choices):
+            if f.allowed_choices[c_idx] == sv:
+                found = True
+                break
+            c_idx = c_idx + 1
+        if not found:
+            out.append(SafeConfigDiagnostic(ERR_CONFIG_FORMAT_VIOLATION, k, t_name, "choices", "value is not among allowed choices"))
+    if len(f.pattern) > 0:
+        try:
+            matched: bool = nox.regex.full_match(f.pattern, sv) is not None
+            if not matched:
+                out.append(SafeConfigDiagnostic(ERR_CONFIG_FORMAT_VIOLATION, k, t_name, "pattern", "value does not match declared regex pattern"))
+        except RegexError:
+            out.append(SafeConfigDiagnostic(ERR_CONFIG_PARSE_ERROR, k, t_name, "pattern", "declared regex pattern syntax is invalid"))
+    if len(f.fmt) > 0:
+        if f.fmt == "email" and not _is_valid_email(sv):
+            out.append(SafeConfigDiagnostic(ERR_CONFIG_FORMAT_VIOLATION, k, t_name, "format", "value is not a valid email format"))
+        elif f.fmt == "uuid" and not _is_valid_uuid(sv):
+            out.append(SafeConfigDiagnostic(ERR_CONFIG_FORMAT_VIOLATION, k, t_name, "format", "value is not a valid uuid format"))
+        elif f.fmt == "url" and not _is_valid_url(sv, False):
+            out.append(SafeConfigDiagnostic(ERR_CONFIG_FORMAT_VIOLATION, k, t_name, "format", "value is not a valid url format"))
+        elif f.fmt == "https_url" and not _is_valid_url(sv, True):
+            out.append(SafeConfigDiagnostic(ERR_CONFIG_FORMAT_VIOLATION, k, t_name, "format", "value must be a valid https url"))
+        elif f.fmt == "ipv4" and not _is_valid_ipv4(sv):
+            out.append(SafeConfigDiagnostic(ERR_CONFIG_FORMAT_VIOLATION, k, t_name, "format", "value is not a valid ipv4 address"))
+    return out
+
+def _check_scalar_choices(f: Field, k: str, t_name: str, cv: ConfigValue) -> list[SafeConfigDiagnostic]:
+    out: list[SafeConfigDiagnostic] = []
+    if len(f.allowed_choices) == 0:
+        return out
+    str_repr: str = ""
+    if cv.kind == VAL_INTEGER:
+        str_repr = str(cv.i)
+    elif cv.kind == VAL_FLOAT:
+        str_repr = str(cv.f)
+    elif cv.kind == VAL_BOOLEAN:
+        str_repr = "true" if cv.b else "false"
+    else:
+        str_repr = cv.s
+    found: bool = False
+    c_idx: int = 0
+    while c_idx < len(f.allowed_choices):
+        if f.allowed_choices[c_idx] == str_repr:
+            found = True
+            break
+        c_idx = c_idx + 1
+    if not found:
+        out.append(SafeConfigDiagnostic(ERR_CONFIG_FORMAT_VIOLATION, k, t_name, "choices", "value is not among allowed choices"))
+    return out
+
+def _append_diags(dst: list[SafeConfigDiagnostic], src: list[SafeConfigDiagnostic]) -> list[SafeConfigDiagnostic]:
+    idx: int = 0
+    while idx < len(src):
+        dst.append(src[idx])
+        idx = idx + 1
+    return dst
+
 def validate_entries(entries: dict[str, ConfigEntry], schema: ConfigSchema, is_production: bool) -> ValidationReport:
     # 1. Ensure any missing schema defaults are injected first
     populate_schema_defaults(entries, schema)
@@ -129,6 +272,13 @@ def validate_entries(entries: dict[str, ConfigEntry], schema: ConfigSchema, is_p
                     cr: CoerceResult = coerce_value(e.val, f.field_type)
                     if cr.success:
                         e.val = cr.val
+                        if f.field_type == FIELD_TYPE_STRING:
+                            str_diags: list[SafeConfigDiagnostic] = _check_string_constraints(f, k, t_name, cr.val.s)
+                            s_d_i: int = 0
+                            while s_d_i < len(str_diags):
+                                if str_diags[s_d_i].constraint_id != "non_blank":
+                                    diags.append(str_diags[s_d_i])
+                                s_d_i = s_d_i + 1
                     else:
                         diags.append(SafeConfigDiagnostic(cr.err_code, k, t_name, "type_coercion", cr.err_msg))
             else:
@@ -138,18 +288,33 @@ def validate_entries(entries: dict[str, ConfigEntry], schema: ConfigSchema, is_p
                     diags.append(SafeConfigDiagnostic(cr.err_code, k, t_name, "type_coercion", cr.err_msg))
                 else:
                     e.val = cr.val
-                    # Numeric range checks
+                    # Numeric range and choice checks
                     if f.field_type == FIELD_TYPE_INT or f.field_type == FIELD_TYPE_FLOAT:
                         num: float = float(cr.val.i) if cr.val.kind == VAL_INTEGER else cr.val.f
                         if f.has_min and num < f.min_val:
                             diags.append(SafeConfigDiagnostic(ERR_CONFIG_OUT_OF_RANGE, k, t_name, "min", "value below minimum bound"))
                         if f.has_max and num > f.max_val:
                             diags.append(SafeConfigDiagnostic(ERR_CONFIG_OUT_OF_RANGE, k, t_name, "max", "value exceeds maximum bound"))
+                        sc_diags: list[SafeConfigDiagnostic] = _check_scalar_choices(f, k, t_name, cr.val)
+                        sc_i: int = 0
+                        while sc_i < len(sc_diags):
+                            diags.append(sc_diags[sc_i])
+                            sc_i = sc_i + 1
 
-                    # String non-blank checks
+                    # String constraints (non_blank, length bounds, choices, pattern, format)
                     if f.field_type == FIELD_TYPE_STRING:
-                        if f.non_blank and len(nox.strings.trim(cr.val.s)) == 0:
-                            diags.append(SafeConfigDiagnostic(ERR_CONFIG_EMPTY_NOT_ALLOWED, k, t_name, "non_blank", "whitespace-only value not allowed"))
+                        str_diags2: list[SafeConfigDiagnostic] = _check_string_constraints(f, k, t_name, cr.val.s)
+                        s_d_i2: int = 0
+                        while s_d_i2 < len(str_diags2):
+                            diags.append(str_diags2[s_d_i2])
+                            s_d_i2 = s_d_i2 + 1
+
+                    # List length bounds
+                    if f.field_type == FIELD_TYPE_STRING_LIST:
+                        if f.has_min_len and len(cr.val.arr) < f.min_len:
+                            diags.append(SafeConfigDiagnostic(ERR_CONFIG_OUT_OF_RANGE, k, t_name, "min_len", "list item count below minimum bound"))
+                        if f.has_max_len and len(cr.val.arr) > f.max_len:
+                            diags.append(SafeConfigDiagnostic(ERR_CONFIG_OUT_OF_RANGE, k, t_name, "max_len", "list item count exceeds maximum bound"))
 
             # Strict production check: secrets cannot use hardcoded defaults
             if is_production and f.secret and e.is_default:

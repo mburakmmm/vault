@@ -2,7 +2,7 @@
 # Regression scenarios: FILE-01, FILE-03, FILE-04
 
 from nox.test import assert_eq_str, assert_true
-from sources.files import check_path_confinement, read_bounded_file
+from sources.files import check_path_confinement, read_bounded_file, resolve_safe_join, strip_root_prefix
 from core.errors import ConfigError, ERR_CONFIG_PATH_OUTSIDE_ROOT, ERR_CONFIG_SOURCE_UNAVAILABLE
 
 # -------------------------------------------------------------------------
@@ -78,6 +78,7 @@ assert_true(dotenv_caught, "dotenv file escaping allowed root must be rejected w
 # Test 5: Order-Independent with_allowed_root in ConfigBuilder (CONF-01)
 # -------------------------------------------------------------------------
 from core.builder import ConfigBuilder
+from core.errors import ERR_CONFIG_FORMAT_VIOLATION
 
 # Adding a file first, then calling with_allowed_root must still enforce confinement!
 builder_order: ConfigBuilder = ConfigBuilder()
@@ -94,5 +95,44 @@ except Exception:
     pass
 
 assert_true(order_caught, "calling with_allowed_root after source addition must still enforce confinement")
+
+# -------------------------------------------------------------------------
+# Test 6: Writable Target Safe Join & Component Strip Prefix (NOX 2.1 path)
+# -------------------------------------------------------------------------
+joined_new: str = resolve_safe_join("fixtures/config", "future_output.json")
+assert_true("future_output.json" in joined_new, "resolve_safe_join resolves non-existent child inside existing root")
+
+safe_join_escaped: bool = False
+try:
+    resolve_safe_join("fixtures/config", "../dotenv/escaped.env")
+except ConfigError as err_sj:
+    if err_sj.code == ERR_CONFIG_PATH_OUTSIDE_ROOT:
+        safe_join_escaped = True
+assert_true(safe_join_escaped, "resolve_safe_join must block parent traversal escapes")
+
+stripped_ok: str = strip_root_prefix("/app/config/prod.toml", "/app/config")
+assert_eq_str(stripped_ok, "prod.toml", "strip_root_prefix removes segment boundary prefix")
+stripped_evil: str = strip_root_prefix("/app/config-evil/prod.toml", "/app/config")
+assert_eq_str(stripped_evil, "/app/config-evil/prod.toml", "strip_root_prefix ignores non-segment sibling prefix")
+
+# -------------------------------------------------------------------------
+# Test 7: Fail-Closed Format Rejection in with_file() and with_profile_file()
+# -------------------------------------------------------------------------
+bad_fmt_caught: bool = False
+try:
+    b_fmt: ConfigBuilder = ConfigBuilder()
+    b_fmt.with_file("fixtures/config/app.toml", "xml", True)
+except ConfigError as err_fmt:
+    bad_fmt_caught = err_fmt.code == ERR_CONFIG_FORMAT_VIOLATION
+assert_true(bad_fmt_caught, "with_file() must fail closed with ERR_CONFIG_FORMAT_VIOLATION on unsupported format")
+
+bad_pfmt_caught: bool = False
+try:
+    b_pfmt: ConfigBuilder = ConfigBuilder()
+    b_pfmt.with_profile("production")
+    b_pfmt.with_profile_file("fixtures/config/app.toml", "ini", True)
+except ConfigError as err_pfmt:
+    bad_pfmt_caught = err_pfmt.code == ERR_CONFIG_FORMAT_VIOLATION
+assert_true(bad_pfmt_caught, "with_profile_file() must fail closed with ERR_CONFIG_FORMAT_VIOLATION on unsupported format")
 
 print("SECURITY_TEST: ALL PASS")

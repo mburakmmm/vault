@@ -2,7 +2,7 @@
 # Module: core.builder
 
 from core.types import ConfigEntry, ConfigValue, PRESENCE_MISSING, PRESENCE_NULL, PRESENCE_EMPTY, make_string
-from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_EMPTY_NOT_ALLOWED
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_EMPTY_NOT_ALLOWED, ERR_CONFIG_FORMAT_VIOLATION
 from core.merge import merge_sources
 from core.snapshot import ConfigSnapshot
 from sources.interface import ConfigSource
@@ -10,6 +10,7 @@ from sources.memory import MemorySource
 from sources.json import JsonSource
 from sources.toml import TomlSource
 from sources.yaml import YamlSource
+from sources.signed import SignedConfigSource
 from env.source import DotenvSource
 from env.process import ProcessEnvSource
 from schema.fields import ConfigSchema, Field
@@ -103,17 +104,30 @@ class ConfigBuilder:
             return self.with_toml_file(path, optional)
         if format_name == "yaml" or format_name == "yml":
             return self.with_yaml_file(path, optional)
+        if format_name == "dotenv" or format_name == "env":
+            return self.with_dotenv(path, optional)
+        raise ConfigError(ERR_CONFIG_FORMAT_VIOLATION, format_name, "unsupported config file format: " + format_name)
+
+    def with_signed_file(self: ConfigBuilder, path: str, format_name: str, pub_key_hex: str, signature_hex: str, optional: bool = False) -> ConfigBuilder:
+        ss: SignedConfigSource = SignedConfigSource(path, format_name, pub_key_hex, signature_hex, self.allowed_root, optional, 3, "base")
+        self.sources.append(ss)
         return self
 
     def with_profile_file(self: ConfigBuilder, base_path: str, format_name: str, optional: bool) -> ConfigBuilder:
         p_path: str = profile_filename(base_path, self.profile)
         if format_name == "json":
             self.sources.append(JsonSource(p_path, self.allowed_root, optional, 4, self.profile))
-        elif format_name == "toml":
+            return self
+        if format_name == "toml":
             self.sources.append(TomlSource(p_path, self.allowed_root, optional, 4, self.profile))
-        elif format_name == "yaml" or format_name == "yml":
+            return self
+        if format_name == "yaml" or format_name == "yml":
             self.sources.append(YamlSource(p_path, self.allowed_root, optional, 4, self.profile))
-        return self
+            return self
+        if format_name == "dotenv" or format_name == "env":
+            self.sources.append(DotenvSource(p_path, self.allowed_root, optional, 6, self.profile))
+            return self
+        raise ConfigError(ERR_CONFIG_FORMAT_VIOLATION, format_name, "unsupported profile config file format: " + format_name)
 
     def with_dotenv(self: ConfigBuilder, path: str, optional: bool) -> ConfigBuilder:
         ds: DotenvSource = DotenvSource(path, self.allowed_root, optional, 5, "base")
@@ -149,6 +163,21 @@ class ConfigBuilder:
     def set_production(self: ConfigBuilder, is_prod: bool) -> ConfigBuilder:
         self.is_production = is_prod
         return self
+
+    def validate_report(self: ConfigBuilder) -> ValidationReport:
+        if len(self.allowed_root) > 0:
+            root_idx: int = 0
+            while root_idx < len(self.sources):
+                self.sources[root_idx].set_allowed_root(self.allowed_root)
+                root_idx = root_idx + 1
+        merged: dict[str, ConfigEntry] = merge_sources(self.sources)
+        schema_opt: ConfigSchema | None = self.schema
+        if schema_opt is None:
+            empty_diags: list[SafeConfigDiagnostic] = []
+            return ValidationReport(True, empty_diags)
+        populate_schema_defaults(merged, schema_opt)
+        resolved: dict[str, ConfigEntry] = resolve_interpolations(merged)
+        return validate_entries(resolved, schema_opt, self.is_production)
 
     def build(self: ConfigBuilder) -> ConfigSnapshot:
         # Step 0: Ensure all sources have the final allowed_root configuration (CONF-01)

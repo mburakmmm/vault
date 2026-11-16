@@ -1,0 +1,54 @@
+# VAULT — Cross-Worker Lock-Free Configuration Distribution Bus
+# Module: reload.bus
+# Powered by NOX v2.1.20 nox.atomic.AtomicRef:
+# Shares immutable snapshot payloads and atomic monotonic version counters across
+# isolated OS worker threads (nox.thread.start) and M:N fibers on both QBE and LLVM backends.
+
+from core.snapshot import ConfigSnapshot
+from nox.atomic import AtomicRef, new_ref, from_ref_handle
+
+class SharedConfigBus:
+    _ref: AtomicRef
+    _is_owner: bool
+    _closed: bool
+
+    def __init__(self: SharedConfigBus, initial_payload: str, existing_handle: int = 0) -> None:
+        if existing_handle != 0:
+            self._ref = from_ref_handle(existing_handle)
+            self._is_owner = False
+        else:
+            self._ref = new_ref(initial_payload)
+            self._is_owner = True
+        self._closed = False
+
+    def handle(self: SharedConfigBus) -> int:
+        return self._ref.handle
+
+    def version(self: SharedConfigBus) -> int:
+        return self._ref.version()
+
+    def read_payload(self: SharedConfigBus) -> str:
+        return self._ref.get()
+
+    def poll_if_updated(self: SharedConfigBus, last_seen_version: int) -> str | None:
+        if self._ref.version() > last_seen_version:
+            return self._ref.get()
+        return None
+
+    def publish_payload(self: SharedConfigBus, payload: str) -> int:
+        return self._ref.set(payload)
+
+    def publish_redacted_snapshot(self: SharedConfigBus, snap: ConfigSnapshot) -> int:
+        # Always serializes sanitized redacted JSON so secrets are never stored in shared IPC bytes.
+        return self._ref.set(snap.redacted_json())
+
+    def close(self: SharedConfigBus) -> None:
+        if self._is_owner and not self._closed:
+            self._ref.free()
+            self._closed = True
+
+def create_config_bus(initial_payload: str = "{}") -> SharedConfigBus:
+    return SharedConfigBus(initial_payload, 0)
+
+def attach_config_bus(bus_handle: int) -> SharedConfigBus:
+    return SharedConfigBus("", bus_handle)

@@ -5,7 +5,9 @@ from core.types import ConfigEntry, ConfigValue, SourceOrigin, make_null, make_b
 from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR
 from sources.interface import ConfigSource
 from sources.files import read_bounded_file
+from nox.json import JsonError
 import nox.json
+import nox.strings
 
 def _json_to_config_value(jv: JsonValue) -> ConfigValue:
     if nox.json.is_null(jv):
@@ -13,11 +15,15 @@ def _json_to_config_value(jv: JsonValue) -> ConfigValue:
     if nox.json.is_bool(jv):
         return make_bool(nox.json.as_bool(jv))
     if nox.json.is_number(jv):
-        num_f: float = nox.json.as_number(jv)
-        num_i: int = int(num_f)
-        if float(num_i) == num_f:
-            return make_int(num_i)
-        return make_float(num_f)
+        num_txt: str = nox.json.number_text(jv)
+        has_float_syntax: bool = nox.strings.contains(num_txt, ".") or nox.strings.contains(num_txt, "e") or nox.strings.contains(num_txt, "E")
+        if not has_float_syntax:
+            try:
+                exact_i: int = nox.json.as_int(jv)
+                return make_int(exact_i)
+            except JsonError:
+                return make_float(nox.json.as_number(jv))
+        return make_float(nox.json.as_number(jv))
     if nox.json.is_string(jv):
         return make_string(nox.json.as_string(jv))
     if nox.json.is_array(jv):

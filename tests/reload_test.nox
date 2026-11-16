@@ -7,7 +7,9 @@ from core.errors import ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_INTERPOLATION_CYCLE
 from schema.fields import ConfigSchema
 from sources.memory import MemorySource
 from reload.manager import ReloadManager, ReloadResult, PublishedConfig
+from reload.bus import SharedConfigBus, attach_config_bus
 import nox.time
+import nox.thread
 
 def test_reload_02_successful_reload() -> None:
     # Set up schema and memory source
@@ -641,5 +643,54 @@ def test_worker_isolated_config_coordination() -> None:
     print("PASS: test_worker_isolated_config_coordination")
 
 test_worker_isolated_config_coordination()
+
+async def _bus_worker_task(bus_h: int) -> str:
+    w_bus: SharedConfigBus = attach_config_bus(bus_h)
+    tries: int = 0
+    while w_bus.version() < 2 and tries < 200:
+        nox.time.sleep_ms(2)
+        tries = tries + 1
+    return str(w_bus.version()) + "|" + w_bus.read_payload()
+
+async def _run_shared_config_bus_test() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("SERVICE", True, False, "", False, True)
+    schema.add_string("API_SECRET", True, False, "", True, True)
+
+    b1: ConfigBuilder = ConfigBuilder()
+    b1.with_schema(schema)
+    b1.with_override("SERVICE", "vault_bus_v1")
+    b1.with_override("API_SECRET", "TOP_SECRET_BUS_VALUE")
+    snap1: ConfigSnapshot = b1.build()
+
+    bus: SharedConfigBus = SharedConfigBus("{}")
+    assert bus.version() == 0
+
+    v1: int = bus.publish_redacted_snapshot(snap1)
+    assert v1 == 1
+    assert "TOP_SECRET_BUS_VALUE" not in bus.read_payload()
+    assert "[REDACTED]" in bus.read_payload()
+
+    h1: ThreadHandle[str] = nox.thread.start(_bus_worker_task, bus.handle())
+    h2: ThreadHandle[str] = nox.thread.start(_bus_worker_task, bus.handle())
+
+    nox.time.sleep_ms(5)
+    b2: ConfigBuilder = ConfigBuilder()
+    b2.with_schema(schema)
+    b2.with_override("SERVICE", "vault_bus_v2")
+    b2.with_override("API_SECRET", "TOP_SECRET_BUS_VALUE_2")
+    v2: int = bus.publish_redacted_snapshot(b2.build())
+    assert v2 == 2
+
+    res1: str = await h1.join()
+    res2: str = await h2.join()
+    assert "2|" in res1 and "vault_bus_v2" in res1 and "TOP_SECRET_BUS_VALUE" not in res1
+    assert "2|" in res2 and "vault_bus_v2" in res2 and "TOP_SECRET_BUS_VALUE" not in res2
+    assert bus.poll_if_updated(2) is None
+    assert bus.poll_if_updated(1) is not None
+    bus.close()
+    print("PASS: test_shared_config_bus_cross_worker_atomic_ref")
+
+await spawn _run_shared_config_bus_test()
 
 print("ALL RELOAD TESTS PASSED SUCCESSFULLY!")

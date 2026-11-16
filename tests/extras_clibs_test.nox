@@ -1,0 +1,113 @@
+# VAULT — Opt-In NOX 2.1.172-175 C-Backed Add-Ons Test Suite
+# Verifies sources.json5 (nox.yyjson), schema.pcre2 (nox.pcre2 JIT), and sources.fast_hash (nox.xxhash)
+
+from nox.test import assert_true, assert_eq_str, assert_eq_int
+from nox.fs import write_string, remove_file, exists
+from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
+from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_FORMAT_VIOLATION
+from schema.fields import ConfigSchema
+from schema.validate import ValidationReport
+from sources.json5 import Json5Source, JSON_MODE_RELAXED, JSON_MODE_JSON5
+from sources.fast_hash import FastDigestTracker
+from schema.pcre2 import Pcre2SchemaRules
+
+def test_json5_and_relaxed_jsonc_source() -> None:
+    p_j5: str = "fixtures/config/temp_app.json5"
+    p_jc: str = "fixtures/config/temp_app.jsonc"
+    p_bad: str = "fixtures/config/temp_bad.json5"
+
+    write_string(p_j5, "// JSON5 config with comments, unquoted keys, hex, and trailing commas\n{\n  service: 'vault_json5',\n  snowflake_id: 9007199254740993,\n  port_hex: 0x1F90,\n  enabled: true,\n  nested: { host: 'db.local', }, // trailing comma\n}\n")
+    write_string(p_jc, "/* JSONC */\n{\n  \"name\": \"relaxed_svc\",\n  \"workers\": 4,\n}\n")
+    write_string(p_bad, "{ unclosed: 'oops' ")
+
+    try:
+        # 1. JSON5 full mode with ConfigBuilder
+        b: ConfigBuilder = ConfigBuilder()
+        b.with_allowed_root("fixtures")
+        b.with_source(Json5Source(p_j5, "fixtures", False, 3, "base", JSON_MODE_JSON5))
+        snap: ConfigSnapshot = b.build()
+        assert_eq_str(snap.get_string("service"), "vault_json5", "json5 single quoted string")
+        assert_eq_int(snap.get_int("snowflake_id"), 9007199254740993, "json5 exact 64-bit int")
+        assert_eq_int(snap.get_int("port_hex"), 8080, "json5 hex number")
+        assert_true(snap.get_bool("enabled"), "json5 bool")
+
+        # 2. Relaxed JSONC mode
+        b2: ConfigBuilder = ConfigBuilder()
+        b2.with_allowed_root("fixtures")
+        b2.with_source(Json5Source(p_jc, "fixtures", False, 3, "base", JSON_MODE_RELAXED))
+        snap2: ConfigSnapshot = b2.build()
+        assert_eq_str(snap2.get_string("name"), "relaxed_svc", "jsonc name")
+        assert_eq_int(snap2.get_int("workers"), 4, "jsonc int")
+
+        # 3. Invalid JSON5 fails cleanly
+        bad_caught: bool = False
+        try:
+            src_bad: Json5Source = Json5Source(p_bad, "fixtures", False, 3, "base", JSON_MODE_JSON5)
+            src_bad.load()
+        except ConfigError as err:
+            bad_caught = True
+            assert_eq_str(err.code, ERR_CONFIG_PARSE_ERROR, "invalid json5 parse error")
+        assert_true(bad_caught, "malformed json5 must fail")
+    finally:
+        if exists(p_j5):
+            remove_file(p_j5)
+        if exists(p_jc):
+            remove_file(p_jc)
+        if exists(p_bad):
+            remove_file(p_bad)
+
+    print("PASS: test_json5_and_relaxed_jsonc_source")
+
+def test_pcre2_jit_schema_validation() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("PASSWORD_POLICY_TEST", True, False, "", False, True)
+    schema.add_string("LOCALE_NAME", True, False, "", False, True)
+    schema.add_string("SECRET_API_KEY", True, False, "", True, True)
+
+    rules: Pcre2SchemaRules = Pcre2SchemaRules(True)
+    # PCRE2 lookahead (requires >=1 upper, >=1 digit, min 8 chars) - beyond Python subset regex!
+    rules.add_pattern("PASSWORD_POLICY_TEST", "^(?=.*[A-Z])(?=.*[0-9]).{8,}$", 0, True)
+    # PCRE2 Unicode property class
+    rules.add_pattern("LOCALE_NAME", "^\\p{L}+_\\p{L}+$", 0, True)
+    # Secret pattern check with explicit opt-in & safe diagnostics
+    rules.add_pattern("SECRET_API_KEY", "^vk_live_[A-Za-z0-9]{12,}$", 0, True)
+
+    b_ok: ConfigBuilder = ConfigBuilder()
+    b_ok.with_schema(schema)
+    b_ok.with_override("PASSWORD_POLICY_TEST", "StrongPass2026")
+    b_ok.with_override("LOCALE_NAME", "İstanbul_Türkçe")
+    b_ok.with_override("SECRET_API_KEY", "vk_live_AbCdEf123456")
+    rep_ok: ValidationReport = rules.validate_snapshot(b_ok.build(), True)
+    assert_true(rep_ok.is_valid, "valid PCRE2 constraints pass")
+
+    b_bad: ConfigBuilder = ConfigBuilder()
+    b_bad.with_schema(schema)
+    b_bad.with_override("PASSWORD_POLICY_TEST", "weakpass")
+    b_bad.with_override("LOCALE_NAME", "123_456")
+    b_bad.with_override("SECRET_API_KEY", "DO_NOT_LEAK_BAD_KEY")
+    rep_bad: ValidationReport = rules.validate_snapshot(b_bad.build(), True)
+    assert_true(not rep_bad.is_valid, "invalid PCRE2 constraints fail")
+    assert_eq_int(rep_bad.error_count(), 3, "all 3 PCRE2 errors aggregated")
+    for diag in rep_bad.diagnostics:
+        assert_true("DO_NOT_LEAK_BAD_KEY" not in diag.to_string(), "PCRE2 diagnostic must NEVER leak secret")
+    print("PASS: test_pcre2_jit_schema_validation")
+
+def test_xxhash_fast_dirty_check() -> None:
+    p_tmp: str = "fixtures/dotenv/temp_xxh.env"
+    write_string(p_tmp, "KEY_A=alpha\n")
+    try:
+        tracker: FastDigestTracker = FastDigestTracker("fixtures")
+        assert_true(tracker.has_file_changed(p_tmp, False), "first observation reports changed")
+        assert_true(not tracker.has_file_changed(p_tmp, False), "unchanged file returns false (skip reload)")
+        write_string(p_tmp, "KEY_A=beta\n")
+        assert_true(tracker.has_file_changed(p_tmp, False), "modified file reports changed")
+    finally:
+        if exists(p_tmp):
+            remove_file(p_tmp)
+    print("PASS: test_xxhash_fast_dirty_check")
+
+test_json5_and_relaxed_jsonc_source()
+test_pcre2_jit_schema_validation()
+test_xxhash_fast_dirty_check()
+print("ALL EXTRAS CLIBS TESTS PASSED!")

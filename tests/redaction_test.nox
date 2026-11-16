@@ -140,7 +140,50 @@ def test_secret_cache_ttl() -> None:
 
     cache.clear()
     assert cache.active_count(now_t) == 0
+
+    # Test prune_expired (O(1) dict removal) and monotonic TTL
+    cache.set("k_old", "v_old", 5, 100)
+    cache.set("k_fresh", "v_fresh", 50, 100)
+    pruned: int = cache.prune_expired(120)
+    assert pruned == 1
+    assert not cache.has("k_old", 120)
+    assert cache.has("k_fresh", 120)
+    cache.set_monotonic("mono_k", "mono_v", 5000)
+    mono_res: str | None = cache.get_monotonic("mono_k")
+    assert mono_res is not None
     print("PASS: test_secret_cache_ttl")
+
+def test_snapshot_content_hash_zero_secret_dependency() -> None:
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP", True, False, "", False, True)
+    schema.add_string("API_KEY", True, False, "", True, True)
+
+    b1: ConfigBuilder = ConfigBuilder()
+    b1.with_schema(schema)
+    b1.with_override("APP", "vault_v1")
+    b1.with_override("API_KEY", "SECRET_ALPHA_111")
+    s1: ConfigSnapshot = b1.build()
+
+    b2: ConfigBuilder = ConfigBuilder()
+    b2.with_schema(schema)
+    b2.with_override("APP", "vault_v1")
+    b2.with_override("API_KEY", "SECRET_BETA_999")
+    s2: ConfigSnapshot = b2.build()
+
+    # Non-secret config identical -> content_hash (BLAKE3 over redacted JSON) MUST be identical
+    h1: str = s1.content_hash()
+    h2: str = s2.content_hash()
+    assert len(h1) == 64
+    assert h1 == h2
+
+    # Changing non-secret key MUST change content_hash
+    b3: ConfigBuilder = ConfigBuilder()
+    b3.with_schema(schema)
+    b3.with_override("APP", "vault_v2")
+    b3.with_override("API_KEY", "SECRET_ALPHA_111")
+    h3: str = b3.build().content_hash()
+    assert h3 != h1
+    print("PASS: test_snapshot_content_hash_zero_secret_dependency")
 
 def test_sentinel_matching_redacted_label() -> None:
     # A sentinel that is part of [REDACTED] or matches it must NEVER cause an infinite loop!
@@ -224,4 +267,5 @@ test_secret_cache_ttl()
 test_sentinel_matching_redacted_label()
 test_unicode_multibyte_redaction_alignment()
 test_snapshot_secret_entry_encapsulation()
+test_snapshot_content_hash_zero_secret_dependency()
 print("ALL REDACTION TESTS PASSED SUCCESSFULLY!")

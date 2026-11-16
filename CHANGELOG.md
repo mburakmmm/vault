@@ -5,6 +5,39 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-16 (NOX v2.1.186 Ecosystem Upgrade — Exact JSON Int64, Ed25519 Signed Bundles, Lock-Free AtomicRef Worker Bus & Opt-In Accelerated Modules)
+
+### Added
+- **Cryptographic Integrity & Ed25519 Signed Configuration Bundles (`secrets/integrity.nox`, `sources/signed.nox`):**
+  - Integrated `nox.ed25519` (NOX v2.1.154) and `nox.crypto` (`blake3`, `sha3_256` from v2.1.70).
+  - Added `SignedConfigSource` and `ConfigBuilder.with_signed_file()` performing fail-closed Ed25519 signature verification (`ERR_CONFIG_SIGNATURE_INVALID`) prior to parsing JSON, TOML, YAML, or `.env` payloads.
+  - Added `ConfigSnapshot.content_hash()` computing deterministic BLAKE3 fingerprints exclusively over sanitized `redacted_json()` outputs without exposing secrets or allowing secret-length side channels.
+- **Cross-Worker Lock-Free Snapshot Bus (`reload/bus.nox`, `examples/worker_threads.nox`):**
+  - Added `SharedConfigBus`, `create_config_bus()`, and `attach_config_bus()` built atop `nox.atomic.AtomicRef` (NOX v2.1.20) for tear-free atomic byte snapshot broadcasting across isolated `nox.thread.start` worker threads and M:N tasks on both QBE and LLVM backends.
+  - Upgraded `examples/worker_threads.nox` to spawn concurrent OS worker threads receiving lock-free failover updates.
+- **Complete Schema Constraint Enforcement (`schema/fields.nox`, `schema/validate.nox`, `core/builder.nox`):**
+  - Wired `min_len`, `max_len`, `allowed_choices`, `pattern` (via pure-NOX `nox.regex`), and `fmt` (`"email"`, `"uuid"`, `"url"`, `"https_url"`, `"ipv4"` via `nox.url`) with secret-safe `SafeConfigDiagnostic` reporting and `ConfigBuilder.validate_report()`.
+- **Opt-In Hosted C-Backed Extensions (NOX v2.1.172–175 `noxclibs`, Isolated from Core `vault.nox`):**
+  - `sources/json5.nox`: `Json5Source` using `nox.yyjson` for JSON5 (`'single quotes'`, unquoted keys, hex literals), relaxed JSONC (`// comments`, trailing commas), and high-throughput parsing with full `int64` preservation.
+  - `schema/pcre2.nox`: `Pcre2SchemaRules` using `nox.pcre2` (JIT-compiled Perl-compatible regex with lookaheads/lookbehinds, `\p{...}` Unicode property classes, and ReDoS match limits).
+  - `sources/fast_hash.nox`: `FastDigestTracker` using `nox.xxhash.xxh3_128_hex` for ultra-fast non-cryptographic file change polling prior to reload parsing.
+- **CLI Modernization & Import Isolation (`cli/main.nox`, `cli/entry.nox`, `nox.json`):**
+  - Replaced manual CLI loops with structured `nox.argparse.ArgumentParser` subcommands (`validate`, `explain`, `check-env`, `fingerprint`, `version`, `help`), inline `--opt=val` syntax, strict unrecognized-flag rejection, `vault fingerprint`, and `--verify-ed25519` / `--sig` verification.
+  - Decoupled executable CLI startup into standalone `cli/entry.nox` (wired as `"bin"` in `nox.json`) so `import vault` or `import cli.main` never reads host CLI arguments or calls `nox.os.exit()` on unrecognized host flags.
+- **Seeded Property-Based Fuzzing & Nanosecond Telemetry (`tests/property_test.nox`, `tests/integrity_test.nox`, `tests/extras_clibs_test.nox`, `tests/benchmark_test.nox`):**
+  - Added `nox.property`-based fuzzing across `.env` parsing, secret redaction invariants, merge precedence rank dominance, and TTL cache expiry.
+  - Upgraded statistical and seqlock benchmarks in `tests/benchmark_test.nox` to nanosecond-resolution `nox.time.monotonic_ns()`, eliminating 1ms clock quantization, and added safe writable-target `resolve_safe_join()` / `strip_root_prefix()` (`nox.path.safe_join` / `strip_prefix`).
+
+### Changed & Improved
+- **Monotonic Secret Classification Preservation (`core/merge.nox`):** Fixed scalar/array source override merges to preserve `old_e.is_secret or e.is_secret`, preventing higher-precedence non-secret sources (e.g., OS env or runtime override) from stripping secret classification and leaking values when a key is not re-declared in a schema.
+- **Fail-Closed Builder Format Checks & Presence Consistency (`core/builder.nox`, `core/snapshot.nox`):**
+  - Updated `ConfigBuilder.with_file()` and `ConfigBuilder.with_profile_file()` to raise `ConfigError(ERR_CONFIG_FORMAT_VIOLATION)` on unsupported formats instead of silently ignoring them.
+  - Aligned `ConfigSnapshot.has()`, `keys()`, `explain()`, and getters so explicit `PRESENCE_MISSING` entries behave consistently with absent keys (`has() == False`, raising `ERR_CONFIG_MISSING`).
+- **Exact 64-Bit JSON Integer Preservation (`sources/json.nox`):** Replaced float64 intermediate parsing with `nox.json.number_text()` and `nox.json.as_int()` (NOX v2.1.7+), eliminating precision loss on integers above `2^53` while distinguishing float literals (`1.0`, `2.5`).
+- **O(n) Streaming JSON Redaction (`secrets/redact.nox`):** Replaced quadratic loop string concatenation with buffered list assembly and single `nox.strings.join()` serialization.
+- **Amortized O(1) Secret Cache Eviction (`secrets/cache.nox`):** Replaced O(n) dictionary reconstruction in `SecretCache.evict()` with tombstone `pop()` (NOX v2.1.3+) and added `prune_expired()` and monotonic TTL helpers (`boot_ms()`).
+- **Toolchain, Manifest & CI Upgrade:** Added `"source": "nox"` and `"bin"` entrypoint to `nox.json`, and upgraded GitHub Actions CI & Release workflows across all 4 platforms (`linux-x64`, `linux-arm64`, `macos-arm64`, `windows-x64`) from NOX `v2.1.0` to **`v2.1.186`**.
+
 ## [1.0.13] - 2026-11-10 (Full Transactional Rollback, Hybrid Spin-Backoff & Comparative Seqlock Microbenchmarks)
 
 ### Fixed

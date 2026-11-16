@@ -1,0 +1,29 @@
+# VAULT — Opt-In High-Speed xxHash Non-Cryptographic Change Detector
+# Module: sources.fast_hash (Hosted platforms via NOX v2.1.172 nox.xxhash)
+# Security Boundary: Strictly for fast cache keys and file change polling (dirty-check).
+# NEVER use xxHash for cryptographic integrity or secret hashing — use secrets.integrity (BLAKE3 / Ed25519).
+
+from sources.files import read_bounded_file
+import nox.xxhash
+
+class FastDigestTracker:
+    digests: dict[str, str]
+    allowed_root: str
+
+    def __init__(self: FastDigestTracker, allowed_root: str = "") -> None:
+        self.digests = {}
+        self.allowed_root = allowed_root
+
+    def fingerprint_content(self: FastDigestTracker, content: str) -> str:
+        return nox.xxhash.xxh3_128_hex(content, 0)
+
+    def has_file_changed(self: FastDigestTracker, path: str, optional: bool = True) -> bool:
+        content: str = read_bounded_file(path, self.allowed_root, optional)
+        new_hash: str = nox.xxhash.xxh3_128_hex(content, 0)
+        if path in self.digests and self.digests[path] == new_hash:
+            return False
+        self.digests[path] = new_hash
+        return True
+
+    def reset(self: FastDigestTracker) -> None:
+        self.digests = {}

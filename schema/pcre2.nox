@@ -1,0 +1,64 @@
+# VAULT — Opt-In PCRE2 JIT Regex Schema Validator
+# Module: schema.pcre2 (Hosted platforms with dynamic_code capability via NOX v2.1.174 nox.pcre2)
+# Note: Intentionally NOT re-exported from vault.nox so core VAULT remains usable
+# under --deny-capability dynamic_code, WebAssembly, mobile, and freestanding profiles.
+
+from core.snapshot import ConfigSnapshot
+from core.errors import ERR_CONFIG_FORMAT_VIOLATION, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_MISSING
+from schema.validate import ValidationReport, SafeConfigDiagnostic
+from nox.pcre2 import Pcre2, Pcre2Error
+import nox.pcre2
+
+class Pcre2Rule:
+    key: str
+    pattern_str: str
+    compiled: Pcre2
+    full_match: bool
+
+    def __init__(self: Pcre2Rule, key: str, pattern_str: str, compiled: Pcre2, full_match: bool) -> None:
+        self.key = key
+        self.pattern_str = pattern_str
+        self.compiled = compiled
+        self.full_match = full_match
+
+class Pcre2SchemaRules:
+    rules: list[Pcre2Rule]
+    use_jit: bool
+
+    def __init__(self: Pcre2SchemaRules, use_jit: bool = True) -> None:
+        self.rules = []
+        self.use_jit = use_jit
+
+    def add_pattern(self: Pcre2SchemaRules, key: str, pattern: str, flags: int = 0, full_match: bool = True) -> None:
+        compiled: Pcre2 = nox.pcre2.compile(pattern, flags, self.use_jit)
+        self.rules.append(Pcre2Rule(key, pattern, compiled, full_match))
+
+    def validate_snapshot(self: Pcre2SchemaRules, snap: ConfigSnapshot, allow_secrets: bool = False) -> ValidationReport:
+        diags: list[SafeConfigDiagnostic] = []
+        idx: int = 0
+        while idx < len(self.rules):
+            rule: Pcre2Rule = self.rules[idx]
+            if not snap.has(rule.key):
+                diags.append(SafeConfigDiagnostic(ERR_CONFIG_MISSING, rule.key, "string", "pcre2_required", "key missing during PCRE2 validation"))
+            else:
+                val_str: str = ""
+                if snap.is_secret(rule.key):
+                    if allow_secrets:
+                        val_str = snap.get_secret(rule.key)
+                    else:
+                        # Fail-closed or skip plaintext extraction if allow_secrets=False
+                        idx = idx + 1
+                        continue
+                else:
+                    val_str = snap.get_string(rule.key)
+
+                try:
+                    ok: bool = rule.compiled.is_full_match(val_str) if rule.full_match else rule.compiled.is_match(val_str)
+                    if not ok:
+                        # Safe diagnostic: never expose secret values
+                        diags.append(SafeConfigDiagnostic(ERR_CONFIG_FORMAT_VIOLATION, rule.key, "string", "pcre2_pattern", "value does not satisfy compiled PCRE2 rule"))
+                except Pcre2Error:
+                    diags.append(SafeConfigDiagnostic(ERR_CONFIG_PARSE_ERROR, rule.key, "string", "pcre2_match_limit", "PCRE2 match limit or backtracking bound exceeded"))
+            idx = idx + 1
+
+        return ValidationReport(len(diags) == 0, diags)

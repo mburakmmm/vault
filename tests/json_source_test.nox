@@ -2,6 +2,7 @@
 # Regression scenarios: FORMAT-01, FORMAT-02
 
 from nox.test import assert_eq_str, assert_eq_int, assert_true
+from nox.fs import write_string, remove_file, exists
 from sources.json import JsonSource
 from core.types import ConfigEntry, VAL_STRING, VAL_INTEGER, VAL_FLOAT, VAL_BOOLEAN, VAL_ARRAY, VAL_OBJECT
 from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR
@@ -57,5 +58,28 @@ except Exception:
     pass
 
 assert_true(invalid_caught, "invalid json document must raise CONFIG_PARSE_ERROR")
+
+# -------------------------------------------------------------------------
+# Test 3: Exact 64-bit Integer Preservation (> 2^53) vs Float (NOX v2.1.7+)
+# -------------------------------------------------------------------------
+temp_int64_path: str = "fixtures/config/temp_int64.json"
+write_string(temp_int64_path, "{\"snowflake_id\": 9007199254740993, \"neg_big\": -9007199254740993, \"flt_zero\": 1.0, \"ratio\": 2.5}\n")
+js_big: JsonSource = JsonSource(temp_int64_path, "fixtures", False, 3, "base")
+entries_big: list[ConfigEntry] = js_big.load()
+if exists(temp_int64_path):
+    remove_file(temp_int64_path)
+
+map_big: dict[str, ConfigEntry] = {}
+bi: int = 0
+while bi < len(entries_big):
+    map_big[entries_big[bi].key] = entries_big[bi]
+    bi = bi + 1
+
+assert_eq_int(map_big["snowflake_id"].val.kind, VAL_INTEGER, "snowflake_id must be integer")
+assert_eq_int(map_big["snowflake_id"].val.i, 9007199254740993, "exact 64-bit int preserved without float loss")
+assert_eq_int(map_big["neg_big"].val.kind, VAL_INTEGER, "neg_big must be integer")
+assert_eq_int(map_big["neg_big"].val.i, -9007199254740993, "exact negative 64-bit int preserved")
+assert_eq_int(map_big["flt_zero"].val.kind, VAL_FLOAT, "1.0 stays VAL_FLOAT")
+assert_eq_int(map_big["ratio"].val.kind, VAL_FLOAT, "2.5 stays VAL_FLOAT")
 
 print("JSON_SOURCE_TEST: ALL PASS")

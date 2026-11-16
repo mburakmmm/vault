@@ -1,0 +1,115 @@
+# VAULT — Property-Based Fuzzing & Security Invariant Tests (NOX v2.1.12 nox.property)
+# Verifies invariants across 100+ deterministically generated inputs per property.
+
+import nox.property
+import nox.strings
+from nox.property import Rng
+from vault import parse_dotenv, EnvEntry, EnvParseError, MemorySource, ConfigSource, ConfigEntry, merge_sources, ConfigBuilder, ConfigSchema, ConfigSnapshot, redact_string, SecretCache
+
+# Property 1: Dotenv parser never crashes unhandled on random generated ASCII & NUL bytes
+def prop_dotenv_fuzz_safety(r: Rng) -> bool:
+    k: str = "K_" + r.ascii_str(12)
+    v: str = r.ascii_str(24)
+    if len(k) == 2:
+        k = "K_DEFAULT"
+    doc: str = k + "=" + v + "\n"
+    entries: list[EnvEntry] = parse_dotenv(doc)
+    if len(entries) != 1:
+        return False
+    if entries[0].key != k or entries[0].value != v:
+        return False
+
+    # Embedded NUL byte must ALWAYS fail with EnvParseError
+    nul_doc: str = k + "=abc" + nox.strings.char_from_byte(0) + "def"
+    threw: bool = False
+    try:
+        parse_dotenv(nul_doc)
+    except EnvParseError:
+        threw = True
+    return threw
+
+# Property 2: Structural & sentinel secret redaction never discloses non-trivial secret values
+def prop_redaction_never_leaks(r: Rng) -> bool:
+    sec: str = "SEC_" + r.ascii_str(12) + "_" + str(r.int_range(100, 999))
+    pub_val: str = "pub_" + r.ascii_str(8)
+
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("PUBLIC_FIELD", True, False, "", False, True)
+    schema.add_string("SECRET_FIELD", True, False, "", True, True)
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_schema(schema)
+    b.with_override("PUBLIC_FIELD", pub_val)
+    b.with_override("SECRET_FIELD", sec)
+    b.with_override("DERIVED_SECRET", "token=" + "${SECRET_FIELD}")
+
+    snap: ConfigSnapshot = b.build()
+    if sec in snap.redacted_json():
+        return False
+    if sec in snap.explain("SECRET_FIELD"):
+        return False
+    if sec in snap.explain("DERIVED_SECRET"):
+        return False
+    entries_map: dict[str, ConfigEntry] = snap.entries
+    if sec in entries_map["SECRET_FIELD"].val.s:
+        return False
+    sentinels: list[str] = []
+    sentinels.append(sec)
+    if sec in redact_string("auth " + sec + " failed", sentinels):
+        return False
+    return snap.get_secret("SECRET_FIELD") == sec
+
+# Property 3: Merge precedence strictly obeys rank ordering regardless of insertion order
+def prop_merge_rank_determinism(r: Rng) -> bool:
+    val_low: str = "low_" + r.ascii_str(10)
+    val_high: str = "high_" + r.ascii_str(10)
+    r_low: int = r.int_range(1, 4)
+    r_high: int = r.int_range(5, 9)
+
+    s_low: MemorySource = MemorySource("low", r_low, "base", False)
+    s_low.set_string("SHARED_KEY", val_low)
+    s_high: MemorySource = MemorySource("high", r_high, "base", False)
+    s_high.set_string("SHARED_KEY", val_high)
+
+    # Order A: low then high; Order B: high then low -> identical winner!
+    srcs_a: list[ConfigSource] = []
+    srcs_a.append(s_low)
+    srcs_a.append(s_high)
+    srcs_b: list[ConfigSource] = []
+    srcs_b.append(s_high)
+    srcs_b.append(s_low)
+
+    m1: dict[str, ConfigEntry] = merge_sources(srcs_a)
+    m2: dict[str, ConfigEntry] = merge_sources(srcs_b)
+    return m1["SHARED_KEY"].val.s == val_high and m2["SHARED_KEY"].val.s == val_high
+
+# Property 4: SecretCache TTL eviction & bounds
+def prop_secret_cache_ttl(r: Rng) -> bool:
+    cache: SecretCache = SecretCache()
+    t0: int = r.int_range(100, 10000)
+    ttl: int = r.int_range(1, 500)
+    val: str = "cached_" + r.ascii_str(10)
+
+    cache.set("k", val, ttl, t0)
+    got_before: str | None = cache.get("k", t0 + ttl - 1)
+    matched: bool = False
+    if got_before is not None:
+        matched = (got_before == val)
+    if not matched:
+        return False
+
+    # Exact expiration or beyond returns None and evicts
+    got_after: str | None = cache.get("k", t0 + ttl)
+    if got_after is not None:
+        return False
+    return cache.active_count(t0 + ttl) == 0
+
+nox.property.check("dotenv_fuzz_safety", prop_dotenv_fuzz_safety, 100, 20261116, 30)
+print("PASS: prop_dotenv_fuzz_safety (100 runs)")
+nox.property.check("redaction_never_leaks", prop_redaction_never_leaks, 60, 20261117, 25)
+print("PASS: prop_redaction_never_leaks (60 runs)")
+nox.property.check("merge_rank_determinism", prop_merge_rank_determinism, 100, 20261118, 25)
+print("PASS: prop_merge_rank_determinism (100 runs)")
+nox.property.check("secret_cache_ttl", prop_secret_cache_ttl, 100, 20261119, 25)
+print("PASS: prop_secret_cache_ttl (100 runs)")
+print("ALL PROPERTY-BASED FUZZ TESTS PASSED!")

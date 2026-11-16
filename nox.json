@@ -1,6 +1,11 @@
 {
   "name": "vault",
-  "version": "1.0.13",
+  "version": "1.1.0",
+  "source": "nox",
   "entry": "vault.nox",
+  "bin": {
+    "name": "vault",
+    "path": "cli/entry.nox"
+  },
   "dependencies": {}
 }

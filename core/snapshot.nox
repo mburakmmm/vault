@@ -6,6 +6,7 @@ from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALL
 from secrets.mark import SecretValue
 from secrets.reveal import reveal_secret_entry, create_secret_value
 from secrets.redact import to_redacted_json
+from secrets.integrity import compute_blake3_hex
 import nox.strings
 
 class ConfigSnapshot:
@@ -41,7 +42,9 @@ class ConfigSnapshot:
         return sanitized
 
     def has(self: ConfigSnapshot, key: str) -> bool:
-        return key in self._entries
+        if key not in self._entries:
+            return False
+        return self._entries[key].presence != PRESENCE_MISSING
 
     def is_null(self: ConfigSnapshot, key: str) -> bool:
         if key not in self._entries:
@@ -54,13 +57,23 @@ class ConfigSnapshot:
         return self._entries[key].is_secret
 
     def keys(self: ConfigSnapshot) -> list[str]:
-        return self._entries.keys()
+        all_keys: list[str] = self._entries.keys()
+        present_keys: list[str] = []
+        idx: int = 0
+        while idx < len(all_keys):
+            k: str = all_keys[idx]
+            if self._entries[k].presence != PRESENCE_MISSING:
+                present_keys.append(k)
+            idx = idx + 1
+        return present_keys
 
     def get_entry(self: ConfigSnapshot, key: str) -> ConfigEntry:
         # Returns a defensive clone of ConfigEntry for non-secret keys (IMMUT-02, IMMUT-03)
         if key not in self._entries:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
         e: ConfigEntry = self._entries[key]
+        if e.presence == PRESENCE_MISSING:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
         if e.is_secret:
             raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret(), get_secret_value(), or get_secret_entry() for explicit intentional access")
         return clone_config_entry(e)
@@ -69,13 +82,18 @@ class ConfigSnapshot:
         # Explicit intentional retrieval of secret ConfigEntry (IMMUT-03)
         if key not in self._entries:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
-        return clone_config_entry(self._entries[key])
+        e: ConfigEntry = self._entries[key]
+        if e.presence == PRESENCE_MISSING:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
+        return clone_config_entry(e)
 
     def get_metadata(self: ConfigSnapshot, key: str) -> ConfigEntry:
         # Safe non-sensitive metadata inspection: if secret, val is masked with [REDACTED] (IMMUT-03)
         if key not in self._entries:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
         cloned: ConfigEntry = clone_config_entry(self._entries[key])
+        if cloned.presence == PRESENCE_MISSING:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
         if cloned.is_secret:
             cloned.val = make_string("[REDACTED]")
         return cloned
@@ -88,6 +106,8 @@ class ConfigSnapshot:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self._entries[key]
+        if e.presence == PRESENCE_MISSING:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
         if e.is_secret:
             raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
 
@@ -113,6 +133,8 @@ class ConfigSnapshot:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self._entries[key]
+        if e.presence == PRESENCE_MISSING:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
         if e.is_secret:
             raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
 
@@ -136,6 +158,8 @@ class ConfigSnapshot:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self._entries[key]
+        if e.presence == PRESENCE_MISSING:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
         if e.is_secret:
             raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
 
@@ -161,6 +185,8 @@ class ConfigSnapshot:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self._entries[key]
+        if e.presence == PRESENCE_MISSING:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
         if e.is_secret:
             raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
 
@@ -191,6 +217,8 @@ class ConfigSnapshot:
             raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
 
         e: ConfigEntry = self._entries[key]
+        if e.presence == PRESENCE_MISSING:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "configuration key is missing")
         if e.is_secret:
             raise ConfigError(ERR_CONFIG_SECRET_SOURCE_DENIED, key, "key is classified as a secret: call get_secret() or get_secret_value() for explicit intentional access")
 
@@ -229,6 +257,8 @@ class ConfigSnapshot:
             return "key='" + key + "': missing (not present in any source)"
 
         e: ConfigEntry = self._entries[key]
+        if e.presence == PRESENCE_MISSING:
+            return "key='" + key + "': missing (marked missing by source_kind=" + e.origin.source_kind + ", source_id='" + e.origin.source_id + "')"
         secret_str: str = "false"
         if e.is_secret:
             secret_str = "true"
@@ -251,6 +281,11 @@ class ConfigSnapshot:
 
     def redacted_json(self: ConfigSnapshot) -> str:
         return to_redacted_json(self._entries)
+
+    def content_hash(self: ConfigSnapshot) -> str:
+        # Computes deterministic BLAKE3 digest exclusively over sanitized redacted JSON.
+        # Secret values are masked as "[REDACTED]" before hashing, ensuring zero secret leakage.
+        return compute_blake3_hex(self.redacted_json())
 
     def version(self: ConfigSnapshot) -> str:
         return self.snapshot_version

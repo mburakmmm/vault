@@ -1,0 +1,17 @@
+# VAULT — Standalone Executable CLI Entry Point
+# Module: cli.entry
+# Kept separate from cli.main and vault.nox so importing VAULT as a library
+# never parses application CLI arguments or exits the host process.
+
+from cli.main import run_cli
+import nox.os
+
+cmd_args: list[str] = []
+arg_idx: int = 1
+while arg_idx < nox.os.arg_count():
+    cmd_args.append(nox.os.arg(arg_idx))
+    arg_idx = arg_idx + 1
+
+exit_code: int = run_cli(cmd_args)
+if exit_code != 0:
+    nox.os.exit(exit_code)

@@ -189,12 +189,12 @@ def test_statistical_benchmark_multirun() -> None:
     # PERF-04: Multi-run microbenchmark (50 runs x 5 batches = 250,000 keys) collecting sub-millisecond us/key & p50/p90/p95/p99 percentiles
     runs: int = 50
     batch_per_run: int = 5
-    total_ms: int = 0
-    times: list[int] = []
+    total_ns: int = 0
+    times_ns: list[int] = []
 
     run_idx: int = 0
     while run_idx < runs:
-        t0: int = nox.time.now_ms()
+        t0_ns: int = nox.time.monotonic_ns()
         b_idx: int = 0
         while b_idx < batch_per_run:
             b: ConfigBuilder = ConfigBuilder()
@@ -202,42 +202,46 @@ def test_statistical_benchmark_multirun() -> None:
             b.with_schema(schema)
             s: ConfigSnapshot = b.build()
             b_idx = b_idx + 1
-        elapsed: int = nox.time.now_ms() - t0
+        elapsed_ns: int = nox.time.monotonic_ns() - t0_ns
+        if elapsed_ns < 0:
+            elapsed_ns = 0
 
-        total_ms = total_ms + elapsed
-        times.append(elapsed)
+        total_ns = total_ns + elapsed_ns
+        times_ns.append(elapsed_ns)
         run_idx = run_idx + 1
 
     # Sort times to compute exact percentiles
     sort_i: int = 1
-    while sort_i < len(times):
-        val: int = times[sort_i]
+    while sort_i < len(times_ns):
+        val: int = times_ns[sort_i]
         sort_j: int = sort_i - 1
-        while sort_j >= 0 and times[sort_j] > val:
-            times[sort_j + 1] = times[sort_j]
+        while sort_j >= 0 and times_ns[sort_j] > val:
+            times_ns[sort_j + 1] = times_ns[sort_j]
             sort_j = sort_j - 1
-        times[sort_j + 1] = val
+        times_ns[sort_j + 1] = val
         sort_i = sort_i + 1
 
-    min_ms: int = times[0]
-    p50_ms: int = times[25] # 50th percentile (median)
-    p90_ms: int = times[45] # 90th percentile
-    p95_ms: int = times[47] # 95th percentile
-    p99_ms: int = times[49] # 99th percentile
-    max_ms: int = times[len(times) - 1]
-    avg_ms: int = total_ms // runs
+    min_ns: int = times_ns[0]
+    p50_ns_run: int = times_ns[25] # 50th percentile (median)
+    p90_ns_run: int = times_ns[45] # 90th percentile
+    p95_ns_run: int = times_ns[47] # 95th percentile
+    p99_ns_run: int = times_ns[49] # 99th percentile
+    max_ns: int = times_ns[len(times_ns) - 1]
+    avg_ns_run: int = total_ns // runs
 
     # Sub-millisecond latency per key operation in exact nanoseconds and float microseconds
     total_keys_per_run: int = batch_per_run * 1000
-    p50_ns: int = (p50_ms * 1000000) // total_keys_per_run
-    p95_ns: int = (p95_ms * 1000000) // total_keys_per_run
-    p99_ns: int = (p99_ms * 1000000) // total_keys_per_run
+    p50_ns: int = p50_ns_run // total_keys_per_run
+    p95_ns: int = p95_ns_run // total_keys_per_run
+    p99_ns: int = p99_ns_run // total_keys_per_run
 
     p50_us_flt: float = float(p50_ns) / 1000.0
     p95_us_flt: float = float(p95_ns) / 1000.0
     p99_us_flt: float = float(p99_ns) / 1000.0
 
-    print("Statistical Microbenchmark (50 runs x 5 batches x 1000 keys = 250,000 key resolutions): min=" + str(min_ms) + "ms, p50=" + str(p50_ms) + "ms (" + str(p50_ns) + " ns/key | " + str(p50_us_flt) + " us/key), p90=" + str(p90_ms) + "ms, p95=" + str(p95_ms) + "ms (" + str(p95_ns) + " ns/key | " + str(p95_us_flt) + " us/key), p99=" + str(p99_ms) + "ms (" + str(p99_ns) + " ns/key | " + str(p99_us_flt) + " us/key), max=" + str(max_ms) + "ms, avg=" + str(avg_ms) + "ms")
+    p95_ms: int = p95_ns_run // 1000000
+    avg_ms: int = avg_ns_run // 1000000
+    print("Statistical Microbenchmark (50 runs x 5 batches x 1000 keys = 250,000 key resolutions, monotonic_ns): min=" + str(min_ns // 1000) + "us, p50=" + str(p50_ns_run // 1000) + "us (" + str(p50_ns) + " ns/key | " + str(p50_us_flt) + " us/key), p90=" + str(p90_ns_run // 1000) + "us, p95=" + str(p95_ns_run // 1000) + "us (" + str(p95_ns) + " ns/key | " + str(p95_us_flt) + " us/key), p99=" + str(p99_ns_run // 1000) + "us (" + str(p99_ns) + " ns/key | " + str(p99_us_flt) + " us/key), max=" + str(max_ns // 1000) + "us, avg=" + str(avg_ns_run // 1000) + "us")
     assert_true(p95_ms < 1000, "p95 latency must be < 1000ms, actual: " + str(p95_ms) + " ms")
     assert_true(avg_ms < 1000, "Statistical average latency must be < 1000ms, actual: " + str(avg_ms) + " ms")
 
@@ -269,36 +273,74 @@ def test_seqlock_read_benchmark() -> None:
     total_reads: int = 500000
 
     # 2. Baseline Direct Unlocked Field Read (500,000 reads) with black-hole state consumption
-    t_base_0: int = nox.time.boot_ms()
+    t_base_0: int = nox.time.monotonic_ns()
     i_base: int = 0
     checksum_base: int = 0
     while i_base < total_reads:
         pub_direct: PublishedConfig = mgr._published
         checksum_base = checksum_base + pub_direct.version
         i_base = i_base + 1
-    t_base_elapsed: int = nox.time.boot_ms() - t_base_0
+    t_base_ns: int = nox.time.monotonic_ns() - t_base_0
+    if t_base_ns < 0:
+        t_base_ns = 0
     assert_true(checksum_base == total_reads, "Direct read checksum must match")
 
     # 3. Synchronized Seqlock Read Barrier (500,000 reads) with black-hole state consumption
-    t_seq_0: int = nox.time.boot_ms()
+    t_seq_0: int = nox.time.monotonic_ns()
     i_seq: int = 0
     checksum_seq: int = 0
     while i_seq < total_reads:
         pub_seq: PublishedConfig = mgr.get_published()
         checksum_seq = checksum_seq + pub_seq.version
         i_seq = i_seq + 1
-    t_seq_elapsed: int = nox.time.boot_ms() - t_seq_0
+    t_seq_ns: int = nox.time.monotonic_ns() - t_seq_0
+    if t_seq_ns < 0:
+        t_seq_ns = 0
     assert_true(checksum_seq == total_reads, "Seqlock read checksum must match")
 
-    # 4. Accurate per-read nanoseconds and comparative overhead calculation
-    ns_direct_per_read: int = (t_base_elapsed * 1000000) // total_reads
-    ns_seqlock_per_read: int = (t_seq_elapsed * 1000000) // total_reads
+    # 4. Accurate per-read nanoseconds via nanosecond monotonic clock
+    ns_direct_per_read: int = t_base_ns // total_reads
+    ns_seqlock_per_read: int = t_seq_ns // total_reads
     overhead_ns: int = ns_seqlock_per_read - ns_direct_per_read
     if overhead_ns < 0:
         overhead_ns = 0
 
-    print("Comparative Seqlock Benchmark (500,000 reads, monotonic boot clock): direct=" + str(t_base_elapsed) + "ms (" + str(ns_direct_per_read) + " ns/read), seqlock=" + str(t_seq_elapsed) + "ms (" + str(ns_seqlock_per_read) + " ns/read), delta overhead=" + str(overhead_ns) + " ns/read")
-    assert_true(t_seq_elapsed < 2000, "500,000 seqlock reads must complete under 2000ms")
+    t_seq_ms: int = t_seq_ns // 1000000
+    print("Comparative Seqlock Benchmark (500,000 reads, monotonic_ns): direct=" + str(t_base_ns // 1000) + "us (" + str(ns_direct_per_read) + " ns/read), seqlock=" + str(t_seq_ns // 1000) + "us (" + str(ns_seqlock_per_read) + " ns/read), delta overhead=" + str(overhead_ns) + " ns/read")
+    assert_true(t_seq_ms < 2000, "500,000 seqlock reads must complete under 2000ms")
 
 test_seqlock_read_benchmark()
 print("PASS: test_seqlock_read_benchmark")
+
+def test_monotonic_ns_and_redacted_json_on_benchmark() -> None:
+    # NOX v2.1.13 monotonic_ns() + O(n) secrets.redact assembly for 1,000 keys
+    schema: ConfigSchema = ConfigSchema()
+    mem_src: MemorySource = MemorySource("redact_bench", 2, "base", False)
+    i: int = 0
+    while i < 900:
+        mem_src.set_string("PUBLIC_KEY_" + str(i), "pub_val_" + str(i))
+        i = i + 1
+    j: int = 0
+    while j < 100:
+        k_s: str = "SECRET_KEY_" + str(j)
+        schema.add_string(k_s, True, False, "", True, True)
+        mem_src.set_string(k_s, "top_secret_val_" + str(j))
+        j = j + 1
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_schema(schema)
+    b.with_source(mem_src)
+    snap: ConfigSnapshot = b.build()
+
+    t_ns0: int = nox.time.monotonic_ns()
+    out_json: str = snap.redacted_json()
+    t_ns1: int = nox.time.monotonic_ns()
+    elapsed_ns: int = t_ns1 - t_ns0
+
+    assert_true("top_secret_val_0" not in out_json, "secret redacted")
+    assert_true("PUBLIC_KEY_899" in out_json, "public key present")
+    assert_true(elapsed_ns >= 0, "monotonic_ns non-negative")
+    print("O(n) redacted_json() 1000 keys: " + str(elapsed_ns) + " ns (" + str(elapsed_ns // 1000) + " us)")
+    print("PASS: test_monotonic_ns_and_redacted_json_on_benchmark")
+
+test_monotonic_ns_and_redacted_json_on_benchmark()

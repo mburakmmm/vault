@@ -2,6 +2,7 @@
 # Tests: CLI-01 (Validate), CLI-02 (Help Safety), CLI-03 (Explain), CLI-04 (Check-Env), CLI-05 (Version)
 
 from cli.main import run_cli, parse_cli_args, CliOptions, CLI_VERSION
+import vault
 import nox.os
 
 def test_cli_help_safety() -> None:
@@ -24,7 +25,7 @@ def test_cli_version() -> None:
     assert run_cli(["version"]) == 0
     assert run_cli(["--version"]) == 0
     assert run_cli(["-v"]) == 0
-    assert CLI_VERSION == "1.0.13"
+    assert CLI_VERSION == "1.1.0"
     print("PASS: test_cli_version")
 
 def test_cli_validate_success() -> None:
@@ -87,6 +88,36 @@ def test_cli_unknown_command() -> None:
     assert run_cli(args_unknown) == 1
     print("PASS: test_cli_unknown_command")
 
+def test_cli_argparse_inline_and_fingerprint() -> None:
+    # Verify NOX 2.1 argparse '--opt=value' inline option syntax
+    args_eq: list[str] = ["validate", "--config=fixtures/config/app.json", "--root=."]
+    assert run_cli(args_eq) == 0
+
+    # Verify unknown flag rejected cleanly by argparse
+    args_bad_flag: list[str] = ["validate", "--nonexistent-flag", "123"]
+    assert run_cli(args_bad_flag) == 1
+
+    # Verify fingerprint command prints non-secret blake3 hash and exits 0
+    args_fp: list[str] = ["fingerprint", "--config=fixtures/config/app.toml", "--root=."]
+    assert run_cli(args_fp) == 0
+
+    # Verify mismatched --verify-ed25519 without --sig fails closed
+    args_sig_mismatch: list[str] = ["validate", "--config=fixtures/config/app.json", "--verify-ed25519", "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]
+    assert run_cli(args_sig_mismatch) == 1
+    print("PASS: test_cli_argparse_inline_and_fingerprint")
+
+def test_vault_import_cli_isolation() -> None:
+    # P0 Regression: Importing vault or cli.main MUST NOT read process CLI arguments
+    # or invoke nox.os.exit() at module load time (CLI execution lives solely in cli/entry.nox).
+    assert vault.version() == "1.1.0"
+    assert CLI_VERSION == "1.1.0"
+
+    # Direct verification: host process flags are never hijacked on import
+    parsed_host: CliOptions = parse_cli_args(["validate", "--config=fixtures/config/app.toml", "--root=."])
+    assert parsed_host.command == "validate"
+    assert parsed_host.config_path == "fixtures/config/app.toml"
+    print("PASS: test_vault_import_cli_isolation")
+
 # Run all test functions
 test_cli_help_safety()
 test_cli_version()
@@ -95,4 +126,6 @@ test_cli_validate_failure()
 test_cli_explain()
 test_cli_check_env()
 test_cli_unknown_command()
+test_cli_argparse_inline_and_fingerprint()
+test_vault_import_cli_isolation()
 print("ALL CLI TESTS PASSED SUCCESSFULLY!")

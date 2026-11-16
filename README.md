@@ -5,8 +5,8 @@
 
 [![CI](https://github.com/mburakmmm/vault/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/vault/actions/workflows/ci.yml)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20ARM%20%7C%20Linux%20x64%20%7C%20Linux%20ARM%20%7C%20Windows%20x64-blue.svg?style=flat-square)](https://github.com/mburakmmm/vault/actions)
-[![NOX](https://img.shields.io/badge/NOX-v2.1.0-blue.svg?style=flat-square)](https://github.com/mburakmmm/nox-lang)
-[![Version: 1.0.13](https://img.shields.io/badge/Version-1.0.13-success.svg?style=flat-square)](CHANGELOG.md)
+[![NOX](https://img.shields.io/badge/NOX-v2.1.186-blue.svg?style=flat-square)](https://github.com/mburakmmm/nox-lang)
+[![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-success.svg?style=flat-square)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Dual Backend](https://img.shields.io/badge/Backends-LLVM%20%7C%20QBE%20100%25%20Green-brightgreen.svg?style=flat-square)](tests/)
 [![Security: Fail--Closed](https://img.shields.io/badge/Security-Fail--Closed-red.svg?style=flat-square)](docs/security.md)
@@ -59,7 +59,7 @@
 
 ### Core Invariants
 
-1. **NOX Native & Standalone:** Zero runtime external dependencies. Implemented exclusively in pure `.nox` modules and standard library components (`nox.os`, `nox.fs`, `nox.path`, `nox.strings`, `nox.json`, `nox.toml`, `nox.yaml`, `nox.crypto`, `nox.log`, `nox.time`).
+1. **NOX Native & Standalone:** Pure `.nox` package (`"source": "nox"`) targeting NOX v2.1.186 (`nox.os`, `nox.fs`, `nox.path`, `nox.strings`, `nox.json`, `nox.toml`, `nox.yaml`, `nox.crypto`, `nox.ed25519`, `nox.regex`, `nox.url`, `nox.argparse`, `nox.atomic`, `nox.time`). Opt-in accelerated modules (`sources.json5`, `schema.pcre2`, `sources.fast_hash`) leverage NOX `noxclibs` without affecting core portability.
 2. **Safe by Default:** Parsing `.env` files **never** mutates the host process environment (`nox.os.set_var`). Loading yields an isolated, immutable configuration snapshot.
 3. **Fail-Closed Secrecy:** Secret values are wrapped and rendered as `[REDACTED]` in diagnostics, exceptions, JSON exports, and logs. Required secrets missing in production fail closed immediately.
 4. **Deterministic Precedence:** Every key resolves to exactly one winning source across an explicit 9-tier precedence hierarchy with non-sensitive provenance tracking.
@@ -177,21 +177,25 @@ VAULT provides lightweight, zero-dependency adapters for NOX ecosystem projects:
 
 ## 🛠️ Command-Line Interface (CLI)
 
-VAULT includes a zero-dependency CLI tool (`cli/main.nox`):
+VAULT includes a `nox.argparse`-powered CLI tool (`cli/entry.nox`, backed by pure library module `cli/main.nox`, or installed globally as `vault` via `nox.json` `bin`):
 
 ```bash
-# Validate configuration against schema and profile
-noxc run cli/main.nox -- validate --config config/app.toml --profile production
+# Validate configuration against schema, profile, or Ed25519 signature
+noxc run cli/entry.nox -- validate --config=config/app.toml --profile production
+noxc run cli/entry.nox -- validate --config=config/app.json --verify-ed25519 <pub_hex> --sig <sig_hex>
 
 # Explain configuration key provenance without secret disclosure
-noxc run cli/main.nox -- explain DATABASE_URL --config config/app.toml
+noxc run cli/entry.nox -- explain DATABASE_URL --config config/app.toml
+
+# Print deterministic non-secret BLAKE3 content fingerprint of redacted config
+noxc run cli/entry.nox -- fingerprint --config config/app.toml
 
 # Check environment variables
-noxc run cli/main.nox -- check-env --keys PORT,DATABASE_URL
+noxc run cli/entry.nox -- check-env --keys PORT,DATABASE_URL
 
 # Display version and safe help
-noxc run cli/main.nox -- version
-noxc run cli/main.nox -- --help
+noxc run cli/entry.nox -- version
+noxc run cli/entry.nox -- --help
 ```
 
 ---
@@ -208,26 +212,29 @@ noxc test --backend llvm
 noxc test --backend qbe
 ```
 
-### Test Suite Coverage (21 Suites, 100% Passing)
+### Test Suite Coverage (24 Suites, 100% Passing)
 
 | Test Suite | Purpose | Backends |
 | :--- | :--- | :---: |
 | `tests/env_parser_test.nox` | Pure .env parser, quotes, escapes, CRLF, BOM | LLVM & QBE |
 | `tests/env_process_test.nox` | Explicit OS environment filtering & Win32 semantics | LLVM & QBE |
 | `tests/merge_test.nox` | 9-tier precedence ordering & provenance | LLVM & QBE |
-| `tests/schema_test.nox` | Typed coercion, ranges, lengths, aggregate errors | LLVM & QBE |
+| `tests/schema_test.nox` | Typed coercion, ranges, lengths, choices, regex patterns, formats | LLVM & QBE |
 | `tests/interpolation_test.nox` | Multi-hop chains, cycle detection, depth limits | LLVM & QBE |
-| `tests/json_source_test.nox` | nox.json bridge & structured container mapping | LLVM & QBE |
-| `tests/toml_source_test.nox` | nox.toml bridge & table navigation | LLVM & QBE |
-| `tests/yaml_source_test.nox` | nox.yaml bridge & safe subset extraction | LLVM & QBE |
-| `tests/security_test.nox` | Root confinement, path traversal rejection | LLVM & QBE |
+| `tests/json_source_test.nox` | `nox.json` bridge, lazy tape access & exact 64-bit integer precision | LLVM & QBE |
+| `tests/toml_source_test.nox` | `nox.toml` bridge & table navigation | LLVM & QBE |
+| `tests/yaml_source_test.nox` | `nox.yaml` bridge & safe subset extraction | LLVM & QBE |
+| `tests/security_test.nox` | Root confinement, path traversal rejection, `safe_join`, `strip_prefix` | LLVM & QBE |
 | `tests/profiles_test.nox` | Profile overlay precedence & production strictness | LLVM & QBE |
-| `tests/redaction_test.nox` | Sentinel string scanning, JSON masking, TTL cache | LLVM & QBE |
+| `tests/redaction_test.nox` | O(n) JSON masking, BLAKE3 content hash, O(1) TTL cache | LLVM & QBE |
 | `tests/secret_provider_test.nox`| Local providers (env, file, memory) & precedence rank 7 | LLVM & QBE |
 | `tests/remote_provider_test.nox`| Remote HTTPS provider, SSRF protection, redirect defense, DNS pinning | LLVM & QBE |
-| `tests/reload_test.nox` | Validate-before-swap atomic reloads, rollback & concurrent tasks | LLVM & QBE |
-| `tests/benchmark_test.nox` | 1,000+ key load, 1,000-field schema validation & 50-run percentile microbenchmark | LLVM & QBE |
-| `tests/cli_test.nox` | CLI commands, exit codes, and safe help | LLVM & QBE |
+| `tests/reload_test.nox` | Seqlock atomic reloads, rollback & `AtomicRef` multi-worker bus | LLVM & QBE |
+| `tests/integrity_test.nox` | BLAKE3 / SHA3-256 checksums, Ed25519 signature verification & `SignedConfigSource` | LLVM & QBE |
+| `tests/extras_clibs_test.nox` | Opt-in JSON5/JSONC (`nox.yyjson`), PCRE2 JIT (`nox.pcre2`), xxHash dirty-check (`nox.xxhash`) | LLVM & QBE |
+| `tests/property_test.nox` | Seeded `nox.property` fuzz tests for parser, redaction, merge & cache invariants | LLVM & QBE |
+| `tests/benchmark_test.nox` | 1,000+ key load, 500k seqlock reads & `monotonic_ns()` O(n) redaction benchmark | LLVM & QBE |
+| `tests/cli_test.nox` | `nox.argparse` CLI commands, `fingerprint`, exit codes, safe help | LLVM & QBE |
 | `tests/adapters_test.nox` | Aether, Nyx, Feather, Noxen, Nova adapters | LLVM & QBE |
 | `tests/regression_matrix_test.nox`| Full AGENTS.md §19 end-to-end regression matrix | LLVM & QBE |
 | `tests/package_consumer_test.nox`| End-to-end package consumer integration & facade ergonomics | LLVM & QBE |

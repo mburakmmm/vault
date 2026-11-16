@@ -2,6 +2,54 @@
 
 ---
 
+## 🔍 Technical Audit Remediation Tracker (2026-11-16 Analysis)
+
+Tracking every P0, P1, and P2 issue raised in the 2026-11-16 ecosystem architecture & security review:
+
+- [x] **P0 / CLI-ISOLATION-01: Remove Top-Level CLI Execution Side Effect from `import vault`** (`cli/main.nox`, `cli/entry.nox`, `nox.json`, `tests/cli_test.nox`, `fixtures/host_app_import_check.nox`)
+  - Moved process argument parsing and `nox.os.exit()` out of `cli/main.nox` into standalone `cli/entry.nox` (declared under `nox.json` `"bin"`).
+  - Verified host applications importing `vault` with unrecognized CLI flags exit cleanly (`exit 0`) without triggering VAULT CLI dispatch.
+- [x] **P0 / MERGE-SEC-01: Monotonic Secret Classification Preservation on Scalar/Array Overrides** (`core/merge.nox`, `tests/merge_test.nox`)
+  - Updated `merge_sources()` scalar/array override branch to preserve `old_e.is_secret or e.is_secret` (matching container merges), preventing a higher-precedence non-secret source from stripping `is_secret` when no schema re-declares the key.
+  - Added regression test overriding Rank 7 `SecretProviderSource` with Rank 8 non-secret source without schema, verifying `get_string()` denial and `[REDACTED]` JSON masking.
+- [ ] **P1 / NET-PIN-UPSTREAM: True Socket-Level IP Pinning with Hostname TLS Verification** (`providers/remote_http.nox`, `docs/compatibility.md`, `docs/security.md`)
+  - **Status:** **BLOCKED (Upstream NOX `2.1.186` stdlib limitation)** — Inspected `nox.http` (`request`) and `nox.tls` (`connect`); NOX `2.1.186` does not expose a separate `connect_ip` + `tls_server_name` dial primitive or raw client TCP socket. VAULT preserves authentic fail-closed behavior (`strict_pinning=True` refuses unpinned transports via `StrictPinnedHttpTransport`). Ready for real pinning transport once NOX stdlib exposes IP-bound TLS dialing.
+- [x] **P1 / CONCUR-WORKER-01: Real Cross-Worker Parallel Thread Broadcast Tests via `AtomicRef`** (`reload/bus.nox`, `examples/worker_threads.nox`, `tests/reload_test.nox`, `docs/adr/0005-reload-consistency.md`)
+  - Implemented `SharedConfigBus` atop `nox.atomic.AtomicRef` and added `test_shared_config_bus_cross_worker_atomic_ref()` using `nox.thread.start` directly inside `tests/reload_test.nox`, separating intra-worker `ReloadManager` consistency from cross-worker payload broadcast.
+- [x] **P2 / BUILDER-FMT-01: Fail-Closed Format Rejection in `with_file()` & `with_profile_file()`** (`core/builder.nox`, `tests/security_test.nox`)
+  - Replaced silent `return self` fallbacks with `raise ConfigError(ERR_CONFIG_FORMAT_VIOLATION, format_name, ...)` when an unrecognized format is supplied; added regression assertions in `tests/security_test.nox`.
+- [x] **P2 / SNAPSHOT-HAS-01: `ConfigSnapshot.has()` vs `PRESENCE_MISSING` Consistency** (`core/snapshot.nox`, `tests/merge_test.nox`)
+  - Updated `has()`, `keys()`, `explain()`, and typed getters in `ConfigSnapshot` so explicit `PRESENCE_MISSING` entries return `has() == False` and raise `ERR_CONFIG_MISSING`.
+- [x] **P2 / PERF-08: Nanosecond `monotonic_ns()` Microbenchmarks** (`tests/benchmark_test.nox`)
+  - Upgraded both `test_statistical_benchmark_multirun()` and `test_seqlock_read_benchmark()` from millisecond `now_ms()` / `boot_ms()` to `nox.time.monotonic_ns()`, removing 1ms clock quantization.
+- [x] **P2 / DOCS-PKG-01: `docs/api.md`, `docs/compatibility.md`, `nox.json` (`source`, `bin`) & CI Workflows** (`docs/api.md`, `docs/compatibility.md`, `nox.json`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`)
+  - Synced documentation to `v1.1.0` / NOX `v2.1.186` baseline (`noxc 2.1.186` required for `ed25519`, `blake3`, `argparse`, `property`, `AtomicRef`), added `"bin"` (`cli/entry.nox`) and `"source": "nox"` in `nox.json`, and verified CLI isolation in CI.
+- [ ] **P2 / ECO-01: Live Downstream Nyx / Aether Framework End-to-End Integration Repo Test** (`adapters/*.nox`, `tests/adapters_test.nox`)
+  - Unit & contract integration tests exist in `tests/adapters_test.nox`, and isolated external `vault` consumer tests pass outside the repo; live multi-repo CI against downstream Nyx/Aether app servers remains open for dedicated ecosystem CI.
+
+---
+
+## 🚀 VAULT v1.1.0 Feature Release — NOX v2.1.186 Integration (Completed & Verified)
+
+Full integration of compiler, runtime, concurrency, cryptographic, and standard-library features shipped across NOX `v2.1.1` → `v2.1.186`:
+
+- [x] **CORE-211 / FORMAT-03: Exact 64-Bit JSON Integers & O(n) Redacted JSON Serialization** (`sources/json.nox`, `secrets/redact.nox`, `secrets/cache.nox`, `sources/files.nox`)
+  - Exact `int64` preservation via `nox.json.number_text` + `as_int`, O(n) `to_redacted_json` assembly via `nox.strings.join`, amortized O(1) tombstone eviction (`dict.pop`) in `SecretCache`, and `nox.path.safe_join` / `strip_prefix` helpers.
+- [x] **SEC-08 / CRYPTO-01: Ed25519 Signed Bundles & Non-Secret BLAKE3 Fingerprints** (`secrets/integrity.nox`, `sources/signed.nox`, `core/snapshot.nox`, `tests/integrity_test.nox`)
+  - `SignedConfigSource` + `ConfigBuilder.with_signed_file()` fail-closed pre-parse Ed25519 signature verification (`nox.ed25519`) and `ConfigSnapshot.content_hash()` via `nox.crypto.blake3(self.redacted_json())`.
+- [x] **SCHEMA-06: Length Bounds, Allowed Choices, Regex Pattern & Semantic Formats** (`schema/fields.nox`, `schema/validate.nox`, `core/builder.nox`, `tests/schema_test.nox`)
+  - Enforced `min_len`, `max_len`, `allowed_choices`, `pattern` (`nox.regex`), `fmt` (`email`, `uuid`, `url`, `https_url`, `ipv4` via `nox.url`), and `ConfigBuilder.validate_report()`.
+- [x] **CONCUR-05: Lock-Free Cross-Worker `AtomicRef` Config Bus** (`reload/bus.nox`, `examples/worker_threads.nox`, `tests/reload_test.nox`)
+  - Implemented `SharedConfigBus` atop `nox.atomic.AtomicRef` for real `nox.thread.start` worker broadcast across QBE & LLVM.
+- [x] **CLI-06: `nox.argparse` CLI Refactoring & `fingerprint` Subcommand** (`cli/main.nox`, `tests/cli_test.nox`)
+  - Adopted `nox.argparse.ArgumentParser`, added `--config=...` inline syntax, `--verify-ed25519` + `--sig`, and `vault fingerprint`.
+- [x] **EXTRAS-01: Opt-In Hosted C-Backed Extensions (`noxclibs`)** (`sources/json5.nox`, `schema/pcre2.nox`, `sources/fast_hash.nox`, `tests/extras_clibs_test.nox`)
+  - Isolated JSON5/JSONC (`nox.yyjson`), JIT PCRE2 (`nox.pcre2`), and non-cryptographic `xxh3_128_hex` dirty-check (`nox.xxhash`) outside `vault.nox` to preserve core portability.
+- [x] **TEST-06 & DIST-10: `nox.property` Fuzzing, `monotonic_ns()` & CI Baseline v2.1.186** (`tests/property_test.nox`, `tests/benchmark_test.nox`, `nox.json`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `docs/compatibility.md`)
+  - 24/24 test suites passing on both LLVM & QBE backends under `noxc 2.1.186`; added `"source": "nox"` to `nox.json`.
+
+---
+
 ## 🚀 VAULT v1.0.13 Patch Release (Completed & Verified)
 
 Addressing findings from the v1.0.12 technical review:

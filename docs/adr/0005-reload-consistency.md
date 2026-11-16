@@ -29,9 +29,9 @@ We adopt a **Validate-Before-Swap, Last-Known-Good** publication model:
    - **Fail-Closed Boundary (RELOAD-11):** If a concurrent write transaction is stalled or torn read persists past `max_seqlock_retries` (default: 1000 attempts), readers fail closed by raising `ConfigError("CONFIG_CONCURRENT_READ_TIMEOUT")`. Readers never receive an unverified snapshot.
    - **Hybrid Spin-Backoff & Monotonic Timeout (RELOAD-14):** Readers employ a sub-microsecond tight spin for the first 10 attempts, transitioning to 1ms sleep backoff bounded by `seqlock_timeout_ms` (default: 250ms monotonic clock).
    - **Full Transactional Rollback (RELOAD-13):** In case of any mid-publish exception or failure, `rollback_transaction()` restores `_atomic_version` and `_published` to prior known-good state before restoring `_atomic_seq` to even parity and releasing the CAS lock.
-6. **NOX Concurrency & Memory Model Boundaries (CONCUR-03 / CONCUR-04):**
-   - **Within Worker Process:** Async fibers and M:N work-stealing tasks safely access published snapshots via atomic hardware CAS and seqlock barriers.
-   - **Across Shared-Nothing Workers:** As defined by NOX runtime architecture (QBE shared-nothing heaps), cross-worker communication utilizes primitive message channels (`ThreadChannel[T]`) or independent `ReloadManager` instances per worker (demonstrated in `examples/worker_threads.nox`).
+6. **NOX Concurrency & Memory Model Boundaries (CONCUR-03 / CONCUR-04 / CONCUR-05):**
+   - **Within Worker Process / M:N Pool:** Async fibers and M:N work-stealing tasks (LLVM and QBE since NOX v2.1.112+) safely access published snapshots via atomic hardware CAS and seqlock barriers, with compiler-inserted object/list ARC barriers (`SHARED`) where applicable.
+   - **Across Shared-Nothing Workers:** Cross-worker broadcast utilizes `SharedConfigBus` (`nox.atomic.AtomicRef`), sharing untorn sanitized byte snapshots and monotonic version counters across isolated heaps (`examples/worker_threads.nox`), alongside primitive channels (`ThreadChannel[T]`) or independent `ReloadManager` instances per worker.
 
 ## Consequences
 

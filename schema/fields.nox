@@ -2,6 +2,7 @@
 # Module: schema.fields
 
 from core.types import ConfigValue, make_string, make_int, make_float, make_bool, make_missing, make_array
+from core.errors import ConfigError, ERR_CONFIG_MISSING, ERR_CONFIG_PARSE_ERROR
 
 # Field Types
 FIELD_TYPE_STRING: int = 1
@@ -29,8 +30,10 @@ class Field:
     has_max_len: bool
     max_len: int
     allowed_choices: list[str]
+    pattern: str
+    fmt: str
 
-    def __init__(self: Field, key: str, field_type: int, required: bool, nullable: bool, non_blank: bool, secret: bool, has_default: bool, default_val: ConfigValue, has_min: bool, min_val: float, has_max: bool, max_val: float, has_min_len: bool, min_len: int, has_max_len: bool, max_len: int, allowed_choices: list[str]) -> None:
+    def __init__(self: Field, key: str, field_type: int, required: bool, nullable: bool, non_blank: bool, secret: bool, has_default: bool, default_val: ConfigValue, has_min: bool, min_val: float, has_max: bool, max_val: float, has_min_len: bool, min_len: int, has_max_len: bool, max_len: int, allowed_choices: list[str], pattern: str = "", fmt: str = "") -> None:
         self.key = key
         self.field_type = field_type
         self.required = required
@@ -48,6 +51,8 @@ class Field:
         self.has_max_len = has_max_len
         self.max_len = max_len
         self.allowed_choices = allowed_choices
+        self.pattern = pattern
+        self.fmt = fmt
 
 def new_string_field(key: str, required: bool, has_default: bool, default_val: str, secret: bool, non_blank: bool) -> Field:
     def_cv: ConfigValue = make_missing()
@@ -117,3 +122,34 @@ class ConfigSchema:
 
     def keys(self: ConfigSchema) -> list[str]:
         return self.field_keys
+
+    def set_nullable(self: ConfigSchema, key: str, nullable: bool) -> None:
+        if key not in self.fields:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "cannot set nullable on unknown schema field")
+        self.fields[key].nullable = nullable
+
+    def set_length_bounds(self: ConfigSchema, key: str, has_min: bool, min_len: int, has_max: bool, max_len: int) -> None:
+        if key not in self.fields:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "cannot set length bounds on unknown schema field")
+        f: Field = self.fields[key]
+        f.has_min_len = has_min
+        f.min_len = min_len
+        f.has_max_len = has_max
+        f.max_len = max_len
+
+    def set_choices(self: ConfigSchema, key: str, choices: list[str]) -> None:
+        if key not in self.fields:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "cannot set choices on unknown schema field")
+        self.fields[key].allowed_choices = choices
+
+    def set_pattern(self: ConfigSchema, key: str, regex_pattern: str) -> None:
+        if key not in self.fields:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "cannot set pattern on unknown schema field")
+        self.fields[key].pattern = regex_pattern
+
+    def set_format(self: ConfigSchema, key: str, fmt: str) -> None:
+        if key not in self.fields:
+            raise ConfigError(ERR_CONFIG_MISSING, key, "cannot set format on unknown schema field")
+        if fmt != "" and fmt != "email" and fmt != "uuid" and fmt != "url" and fmt != "https_url" and fmt != "ipv4":
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, key, "unsupported string format: " + fmt)
+        self.fields[key].fmt = fmt

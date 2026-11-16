@@ -1,0 +1,26 @@
+# Host Application Import Isolation Fixture (P0 Regression Test)
+# Importing vault as a library must NEVER inspect process CLI flags or invoke exit(1).
+
+from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot, MemorySource, version
+from nox.test import assert_eq_str, assert_eq_int
+
+def run_host_app() -> None:
+    assert_eq_str(version(), "1.1.0", "vault version intact")
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("APP_NAME", True, False, "", False, True)
+    schema.add_int("PORT", True, False, 8080, True, 1, True, 65535, False)
+
+    mem: MemorySource = MemorySource("host_mem", 2, "base", False)
+    mem.set_string("APP_NAME", "HostService")
+    mem.set_string("PORT", "9090")
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_schema(schema)
+    b.with_source(mem)
+    snap: ConfigSnapshot = b.build()
+
+    assert_eq_str(snap.get_string("APP_NAME"), "HostService", "host config read")
+    assert_eq_int(snap.get_int("PORT"), 9090, "host port read")
+    print("HOST_APP_IMPORT_ISOLATION: PASS")
+
+run_host_app()

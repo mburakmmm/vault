@@ -1,6 +1,6 @@
-# VAULT API Reference Manual (v1.0.0)
+# VAULT API Reference Manual (v1.1.0)
 
-`vault` is a reusable, framework-independent NOX 2.x library for type-safe configuration, environment management, and secret isolation.
+`vault` is a reusable, framework-independent NOX 2.x library (baseline **NOX v2.1.186**) for type-safe configuration, environment management, cryptographic signature verification, and secret isolation.
 
 ---
 
@@ -51,7 +51,7 @@ import vault
 ```
 
 ### `version() -> str`
-Returns the current stable semantic version of the VAULT library (`"1.0.0"`).
+Returns the current stable semantic version of the VAULT library (`"1.1.0"`).
 
 ---
 
@@ -77,6 +77,10 @@ builder: ConfigBuilder = ConfigBuilder()
   Registers a generic configuration source into the merge queue.
 - **`with_defaults(defaults: dict[str, str]) -> ConfigBuilder`**  
   Registers in-memory base defaults at precedence rank 2.
+- **`with_file(path: str, format_name: str, optional: bool) -> ConfigBuilder`**  
+  Loads `"json"`, `"toml"`, `"yaml"`/`"yml"`, or `"dotenv"`/`"env"`. Fails closed with `ConfigError(ERR_CONFIG_FORMAT_VIOLATION)` on unsupported formats.
+- **`with_profile_file(base_path: str, format_name: str, optional: bool) -> ConfigBuilder`**  
+  Loads a profile-specific overlay file at rank 4 (`"json"`, `"toml"`, `"yaml"`/`"yml"`) or rank 6 (`"dotenv"`/`"env"`). Fails closed with `ConfigError(ERR_CONFIG_FORMAT_VIOLATION)` on unsupported formats.
 - **`with_json_file(path: str, optional: bool) -> ConfigBuilder`**  
   Loads a JSON configuration file at rank 3 (`base`) or rank 4 (`profile`).
 - **`with_toml_file(path: str, optional: bool) -> ConfigBuilder`**  
@@ -95,6 +99,10 @@ builder: ConfigBuilder = ConfigBuilder()
   Sets an explicit runtime/test override at precedence rank 9.
 - **`set_production(is_prod: bool) -> ConfigBuilder`**  
   Enforces strict production-mode checks (no default passwords, fail-closed required secrets).
+- **`with_signed_file(path: str, format_name: str, pub_key_hex: str, signature_hex: str, optional: bool = False) -> ConfigBuilder`**  
+  Loads a JSON, TOML, YAML, or `.env` file only after fail-closed pre-parse Ed25519 signature verification (`ERR_CONFIG_SIGNATURE_INVALID` on mismatch).
+- **`validate_report() -> ValidationReport`**  
+  Runs full merge, default injection, interpolation, and constraint checks returning all aggregated diagnostics without raising.
 - **`build() -> ConfigSnapshot`**  
   Merges all sources in strict rank order, resolves `${KEY}` interpolations with cycle detection, validates against the schema, and returns a frozen, immutable `ConfigSnapshot`. Raises `ConfigError` on any validation, format, cycle, or constraint failure.
 
@@ -116,6 +124,7 @@ An immutable, frozen view of resolved configuration settings.
 - **`get_secret_value(key: str) -> SecretValue`**: Retrieves a `SecretValue` wrapper whose string representation is masked.
 - **`explain(key: str) -> str`**: Returns provenance metadata (winning source, rank, profile, is_secret) **without** disclosing secret values.
 - **`redacted_json() -> str`**: Returns a deterministic JSON string with all secrets masked as `"[REDACTED]"`.
+- **`content_hash() -> str`**: Returns the 64-char hex BLAKE3 digest of `redacted_json()`, providing a non-sensitive state fingerprint across nodes/workers with zero secret exposure.
 - **`version() -> str`**: Returns the snapshot version identifier (e.g. `"v1"`, `"v2"`).
 
 ---
@@ -134,6 +143,33 @@ schema: ConfigSchema = ConfigSchema()
 - **`add_float(key, required, has_default, default_val, has_min, min_val, has_max, max_val, secret)`**
 - **`add_bool(key, required, has_default, default_val, secret)`**
 - **`add_string_list(key, required, secret)`**
+- **`set_nullable(key, nullable)`**
+- **`set_length_bounds(key, has_min, min_len, has_max, max_len)`**
+- **`set_choices(key, choices: list[str])`**
+- **`set_pattern(key, regex_pattern: str)`**
+- **`set_format(key, fmt: str)`** — Supports `"email"`, `"uuid"`, `"url"`, `"https_url"`, `"ipv4"`.
+
+---
+
+## Cross-Worker Bus (`reload.bus`) & Opt-In Extensions
+
+### `SharedConfigBus`
+Wraps `nox.atomic.AtomicRef` for lock-free cross-worker byte snapshot distribution across `nox.thread.start` workers:
+```nox
+from vault import SharedConfigBus, attach_config_bus
+
+bus: SharedConfigBus = SharedConfigBus("{}")
+ver: int = bus.publish_redacted_snapshot(snapshot)
+# In worker receiving bus.handle():
+w_bus: SharedConfigBus = attach_config_bus(bus_h)
+updated_payload: str | None = w_bus.poll_if_updated(last_ver)
+```
+
+### Opt-In C-Backed Submodules (Hosted Platforms)
+Kept intentionally separate from `vault.nox` to preserve core portability:
+- `sources.json5` (`Json5Source`): Relaxed JSONC & full JSON5 via `nox.yyjson`.
+- `schema.pcre2` (`Pcre2SchemaRules`): JIT PCRE2 validation via `nox.pcre2`.
+- `sources.fast_hash` (`FastDigestTracker`): Fast file change detection via `nox.xxhash.xxh3_128_hex`.
 
 ---
 

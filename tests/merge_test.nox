@@ -2,12 +2,14 @@
 # Regression scenarios: MERGE-01, MERGE-02, MERGE-03, MERGE-04
 
 from nox.test import assert_eq_str, assert_eq_int, assert_true
-from core.types import ConfigEntry, ConfigValue, make_string, make_int, make_null, make_object, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
-from core.errors import ConfigError, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED
+from core.types import ConfigEntry, ConfigValue, make_string, make_int, make_null, make_missing, make_object, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
+from core.errors import ConfigError, ERR_CONFIG_TYPE_MISMATCH, ERR_CONFIG_MISSING, ERR_CONFIG_NULL_NOT_ALLOWED, ERR_CONFIG_SECRET_SOURCE_DENIED
 from core.merge import merge_sources
 from core.snapshot import ConfigSnapshot
 from sources.interface import ConfigSource
 from sources.memory import MemorySource
+from providers.memory import MemorySecretProvider
+from providers.source import SecretProviderSource
 import nox.strings
 
 # -------------------------------------------------------------------------
@@ -166,5 +168,60 @@ assert_true(nox.strings.contains(exp, "rank=9"), "explain must include rank 9")
 assert_true(nox.strings.contains(exp, "source_id='override'"), "explain must include source id")
 # Verify secret sentinel is NOT in explain
 assert_true(not nox.strings.contains(exp, "9999"), "explain must NOT include raw values")
+
+# -------------------------------------------------------------------------
+# Test 6: PRESENCE_MISSING Consistency (has/keys/get)
+# -------------------------------------------------------------------------
+src_explicit_missing: MemorySource = MemorySource("explicit_miss_src", 1, "base", False)
+src_explicit_missing.set("MISSING_KEY", make_missing())
+src_explicit_missing.set_string("PRESENT_KEY", "ok")
+
+miss_sources: list[ConfigSource] = []
+miss_sources.append(src_explicit_missing)
+snap_miss: ConfigSnapshot = ConfigSnapshot(merge_sources(miss_sources), "v1")
+
+assert_true(not snap_miss.has("MISSING_KEY"), "has() must return False for PRESENCE_MISSING entry")
+assert_true(not snap_miss.is_null("MISSING_KEY"), "is_null() must return False for PRESENCE_MISSING entry")
+assert_true("MISSING_KEY" not in snap_miss.keys(), "keys() must omit PRESENCE_MISSING entries")
+assert_true(snap_miss.has("PRESENT_KEY"), "PRESENT_KEY must be present")
+
+missing_get_caught: bool = False
+try:
+    snap_miss.get_string("MISSING_KEY")
+except ConfigError as err_m:
+    missing_get_caught = err_m.code == ERR_CONFIG_MISSING
+assert_true(missing_get_caught, "get_string() on PRESENCE_MISSING must raise ERR_CONFIG_MISSING")
+
+# -------------------------------------------------------------------------
+# Test 7: Monotonic Secret Classification Preservation on Scalar Override
+# -------------------------------------------------------------------------
+# Regression: Rank 7 secret provider sets API_TOKEN (is_secret=True).
+# Rank 8 non-secret source overrides API_TOKEN without a schema.
+# Secret classification MUST NOT be downgraded on override!
+sec_prov: MemorySecretProvider = MemorySecretProvider("vault_sec")
+sec_prov.set_secret("API_TOKEN", "provider_secret_v1")
+rank7_secret_src: SecretProviderSource = SecretProviderSource(sec_prov, ["API_TOKEN"], 7, "base", True)
+
+rank8_env_override: MemorySource = MemorySource("env_override", 8, "base", False)
+rank8_env_override.set_string("API_TOKEN", "override_secret_val_999")
+
+sec_override_sources: list[ConfigSource] = []
+sec_override_sources.append(rank7_secret_src)
+sec_override_sources.append(rank8_env_override)
+
+snap_sec_override: ConfigSnapshot = ConfigSnapshot(merge_sources(sec_override_sources), "v1")
+assert_true(snap_sec_override.is_secret("API_TOKEN"), "secret classification must survive non-secret higher-rank override")
+assert_eq_str(snap_sec_override.get_secret("API_TOKEN"), "override_secret_val_999", "winning override value retrievable via get_secret")
+
+denied_secret_get: bool = False
+try:
+    snap_sec_override.get_string("API_TOKEN")
+except ConfigError as err_s:
+    denied_secret_get = err_s.code == ERR_CONFIG_SECRET_SOURCE_DENIED
+assert_true(denied_secret_get, "get_string() must deny access after non-secret source overrides secret source")
+
+redacted_override_json: str = snap_sec_override.redacted_json()
+assert_true("override_secret_val_999" not in redacted_override_json, "overridden secret value must be redacted in JSON")
+assert_true("[REDACTED]" in redacted_override_json, "redacted marker must appear for overridden secret")
 
 print("MERGE_TEST: ALL PASS")
