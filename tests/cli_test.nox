@@ -4,6 +4,7 @@
 from cli.main import run_cli, parse_cli_args, CliOptions, CLI_VERSION
 from nox.process import Command, Output
 import vault
+import nox.fs
 import nox.os
 
 def test_cli_help_safety() -> None:
@@ -107,6 +108,46 @@ def test_cli_argparse_inline_and_fingerprint() -> None:
     assert run_cli(args_sig_mismatch) == 1
     print("PASS: test_cli_argparse_inline_and_fingerprint")
 
+def resolve_noxc() -> str:
+    # NOX v2.2.38 process.zig uses sharedClientIo() whose Threaded.environ is empty,
+    # so POSIX spawnPosix falls back to default_PATH (/usr/local/bin:/bin:/usr/bin)
+    # when resolving bare program names. Passing an explicit path bypasses default_PATH.
+    is_win: bool = False
+    try:
+        is_win = nox.os.getenv("OS") == "Windows_NT"
+    except nox.os.OsError:
+        is_win = False
+
+    if not is_win:
+        try:
+            home_dir: str = nox.os.getenv("HOME")
+            cand_home: str = home_dir + "/.nox-lang/bin/noxc"
+            if nox.fs.is_file(cand_home):
+                return cand_home
+        except nox.os.OsError:
+            pass
+
+    path_sep: str = ":"
+    exe_suffix: str = "/noxc"
+    if is_win:
+        path_sep = ";"
+        exe_suffix = "\\noxc.exe"
+
+    try:
+        path_env: str = nox.os.getenv("PATH")
+        dirs: list[str] = path_env.split(path_sep)
+        i: int = 0
+        while i < len(dirs):
+            d: str = dirs[i].strip()
+            if d != "":
+                cand: str = d + exe_suffix
+                if nox.fs.is_file(cand):
+                    return cand
+            i = i + 1
+    except nox.os.OsError:
+        pass
+    return "noxc"
+
 def test_vault_import_cli_isolation() -> None:
     # P0 Regression: Importing vault or cli.main MUST NOT read process CLI arguments
     # or invoke nox.os.exit() at module load time (CLI execution lives solely in cli/entry.nox).
@@ -119,11 +160,12 @@ def test_vault_import_cli_isolation() -> None:
     assert parsed_host.config_path == "fixtures/config/app.toml"
 
     # Subprocess verification enabled by NOX v2.2.0-rc.2 Windows child-env fix
-    out_app: Output = Command("noxc").arg("run").arg("fixtures/host_app_import_check.nox").arg("--").arg("--unknown-host-flag").arg("--port").arg("9090").run()
+    noxc_bin: str = resolve_noxc()
+    out_app: Output = Command(noxc_bin).arg("run").arg("fixtures/host_app_import_check.nox").arg("--").arg("--unknown-host-flag").arg("--port").arg("9090").run()
     assert out_app.success(), "Host app importing vault must exit 0 even with unrecognized CLI args; stderr=" + out_app.stderr
     assert "HOST_APP_IMPORT_ISOLATION: PASS" in out_app.stdout
 
-    out_cli: Output = Command("noxc").arg("run").arg("cli/entry.nox").arg("--").arg("version").run()
+    out_cli: Output = Command(noxc_bin).arg("run").arg("cli/entry.nox").arg("--").arg("version").run()
     assert out_cli.success(), "cli/entry.nox version must exit 0; stderr=" + out_cli.stderr
     assert "vault version 1.2.0" in out_cli.stdout
     print("PASS: test_vault_import_cli_isolation")

@@ -36,6 +36,10 @@ This document tracks NOX compiler, standard-library, runtime, and CLI limitation
 ### 1.6 Multi-Line Parenthesized Imports & `noxclibs` Portability
 - **Note:** Keep `sources/json5.nox` (`nox.yyjson`), `schema/pcre2.nox` (`nox.pcre2` requiring `dynamic_code`), and `sources/fast_hash.nox` (`nox.xxhash`) out of `vault.nox` so `import vault` links zero `noxclibs.a` C libraries (`nox:native: "false"`). Also preserve Windows case-insensitive Win32 `_putenv_s` vs POSIX case-sensitive env semantics (`tests/env_process_test.nox` & `sources/files.nox`).
 
+### 1.7 `nox.process.Command` POSIX Bare-Name `PATH` Lookup (`ProcessError`)
+- **Observed (`tests/cli_test.nox` on Linux x64, Linux ARM64, macOS ARM64):** `runtime/stdlib_shims/process.zig` (`v2.2.38`) passes `snapshotEnv` to `std.process.run`'s `.environ_map`, but Zig's `Threaded.spawnPosix` resolves bare `argv[0]` (`"noxc"`) via `t.environ.string.PATH` on the shared `http_client.sharedClientIo()` (`Environ.empty`), falling back to `default_PATH` (`/usr/local/bin:/bin:/usr/bin`). Binaries installed under `$HOME/.nox-lang/bin` therefore fail with `ProcessError` on POSIX even when `PATH` contains them (Windows `CreateProcessW` searches `PATH` and passed).
+- **Workaround:** Resolve executable paths (`resolve_noxc()` in `tests/cli_test.nox` via `$HOME/.nox-lang/bin/noxc` / `PATH` + `nox.fs.is_file`) and pass the explicit path to `Command(...)`.
+
 ---
 
 ## 2. Historical NOX `2.1.186` Limitations Resolved by NOX `2.2.38`
