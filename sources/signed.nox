@@ -18,6 +18,86 @@ import nox.json
 import nox.toml
 import nox.yaml
 
+def parse_config_payload(content: str, format_name: str, source_id: str, origin: SourceOrigin, mark_secret: bool = False) -> list[ConfigEntry]:
+    entries: list[ConfigEntry] = []
+
+    if format_name == "dotenv":
+        try:
+            env_entries: list[EnvEntry] = parse_dotenv(content)
+            idx: int = 0
+            while idx < len(env_entries):
+                ee: EnvEntry = env_entries[idx]
+                p: int = PRESENCE_EMPTY if len(ee.value) == 0 else PRESENCE_SUPPLIED
+                entries.append(ConfigEntry(ee.key, make_string(ee.value), p, origin, mark_secret, False))
+                idx = idx + 1
+            return entries
+        except EnvParseError as err:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, source_id, err.to_string())
+
+    if format_name == "json":
+        try:
+            jv: JsonValue = nox.json.parse(content)
+        except Exception:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, source_id, "invalid JSON payload syntax")
+        if not nox.json.is_object(jv):
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, source_id, "root JSON entity must be an object")
+        i: int = 0
+        while i < nox.json.object_len(jv):
+            k: str = nox.json.object_key(jv, i)
+            cv: ConfigValue = _json_to_config_value(nox.json.object_value(jv, i))
+            pr: int = PRESENCE_SUPPLIED
+            if cv.kind == 1:
+                pr = PRESENCE_NULL
+            elif cv.kind == 2 and len(cv.s) == 0:
+                pr = PRESENCE_EMPTY
+            entries.append(ConfigEntry(k, cv, pr, origin, mark_secret, False))
+            i = i + 1
+        return entries
+
+    if format_name == "toml":
+        try:
+            tv: TomlValue = nox.toml.parse(content)
+        except Exception:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, source_id, "invalid TOML payload syntax")
+        if tv.kind != 5:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, source_id, "root TOML document must be a table")
+        t_keys: list[str] = tv.tbl.keys()
+        ti: int = 0
+        while ti < len(t_keys):
+            k_t: str = t_keys[ti]
+            cv_t: ConfigValue = _toml_to_config_value(tv.tbl[k_t])
+            pr_t: int = PRESENCE_SUPPLIED
+            if cv_t.kind == 1:
+                pr_t = PRESENCE_NULL
+            elif cv_t.kind == 2 and len(cv_t.s) == 0:
+                pr_t = PRESENCE_EMPTY
+            entries.append(ConfigEntry(k_t, cv_t, pr_t, origin, mark_secret, False))
+            ti = ti + 1
+        return entries
+
+    if format_name == "yaml" or format_name == "yml":
+        try:
+            yv: YamlValue = nox.yaml.parse(content)
+        except Exception:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, source_id, "invalid YAML payload syntax")
+        if yv.kind != 6:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, source_id, "root YAML document must be a mapping")
+        y_keys: list[str] = yv.mapping.keys()
+        yi: int = 0
+        while yi < len(y_keys):
+            k_y: str = y_keys[yi]
+            cv_y: ConfigValue = _yaml_to_config_value(yv.mapping[k_y])
+            pr_y: int = PRESENCE_SUPPLIED
+            if cv_y.kind == 1:
+                pr_y = PRESENCE_NULL
+            elif cv_y.kind == 2 and len(cv_y.s) == 0:
+                pr_y = PRESENCE_EMPTY
+            entries.append(ConfigEntry(k_y, cv_y, pr_y, origin, mark_secret, False))
+            yi = yi + 1
+        return entries
+
+    raise ConfigError(ERR_CONFIG_PARSE_ERROR, source_id, "unsupported config format: " + format_name)
+
 class SignedConfigSource(ConfigSource):
     path: str
     format_name: str
@@ -51,80 +131,4 @@ class SignedConfigSource(ConfigSource):
         require_valid_ed25519(content, self.pub_key_hex, self.signature_hex, self.path)
 
         origin: SourceOrigin = SourceOrigin(self.path, self.kind, self.profile, self.rank)
-
-        if self.format_name == "dotenv":
-            try:
-                env_entries: list[EnvEntry] = parse_dotenv(content)
-                idx: int = 0
-                while idx < len(env_entries):
-                    ee: EnvEntry = env_entries[idx]
-                    p: int = PRESENCE_EMPTY if len(ee.value) == 0 else PRESENCE_SUPPLIED
-                    entries.append(ConfigEntry(ee.key, make_string(ee.value), p, origin, False, False))
-                    idx = idx + 1
-                return entries
-            except EnvParseError as err:
-                raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, err.to_string())
-
-        if self.format_name == "json":
-            try:
-                jv: JsonValue = nox.json.parse(content)
-            except Exception:
-                raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "invalid signed JSON syntax")
-            if not nox.json.is_object(jv):
-                raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root signed JSON entity must be an object")
-            i: int = 0
-            while i < nox.json.object_len(jv):
-                k: str = nox.json.object_key(jv, i)
-                cv: ConfigValue = _json_to_config_value(nox.json.object_value(jv, i))
-                pr: int = PRESENCE_SUPPLIED
-                if cv.kind == 1:
-                    pr = PRESENCE_NULL
-                elif cv.kind == 2 and len(cv.s) == 0:
-                    pr = PRESENCE_EMPTY
-                entries.append(ConfigEntry(k, cv, pr, origin, False, False))
-                i = i + 1
-            return entries
-
-        if self.format_name == "toml":
-            try:
-                tv: TomlValue = nox.toml.parse(content)
-            except Exception:
-                raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "invalid signed TOML syntax")
-            if tv.kind != 5:
-                raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root signed TOML document must be a table")
-            t_keys: list[str] = tv.tbl.keys()
-            ti: int = 0
-            while ti < len(t_keys):
-                k_t: str = t_keys[ti]
-                cv_t: ConfigValue = _toml_to_config_value(tv.tbl[k_t])
-                pr_t: int = PRESENCE_SUPPLIED
-                if cv_t.kind == 1:
-                    pr_t = PRESENCE_NULL
-                elif cv_t.kind == 2 and len(cv_t.s) == 0:
-                    pr_t = PRESENCE_EMPTY
-                entries.append(ConfigEntry(k_t, cv_t, pr_t, origin, False, False))
-                ti = ti + 1
-            return entries
-
-        if self.format_name == "yaml":
-            try:
-                yv: YamlValue = nox.yaml.parse(content)
-            except Exception:
-                raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "invalid signed YAML syntax")
-            if yv.kind != 6:
-                raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root signed YAML document must be a mapping")
-            y_keys: list[str] = yv.mapping.keys()
-            yi: int = 0
-            while yi < len(y_keys):
-                k_y: str = y_keys[yi]
-                cv_y: ConfigValue = _yaml_to_config_value(yv.mapping[k_y])
-                pr_y: int = PRESENCE_SUPPLIED
-                if cv_y.kind == 1:
-                    pr_y = PRESENCE_NULL
-                elif cv_y.kind == 2 and len(cv_y.s) == 0:
-                    pr_y = PRESENCE_EMPTY
-                entries.append(ConfigEntry(k_y, cv_y, pr_y, origin, False, False))
-                yi = yi + 1
-            return entries
-
-        raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "unsupported signed config format: " + self.format_name)
+        return parse_config_payload(content, self.format_name, self.path, origin, False)

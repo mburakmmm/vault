@@ -5,8 +5,8 @@
 
 [![CI](https://github.com/mburakmmm/vault/actions/workflows/ci.yml/badge.svg)](https://github.com/mburakmmm/vault/actions/workflows/ci.yml)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20ARM%20%7C%20Linux%20x64%20%7C%20Linux%20ARM%20%7C%20Windows%20x64-blue.svg?style=flat-square)](https://github.com/mburakmmm/vault/actions)
-[![NOX](https://img.shields.io/badge/NOX-v2.1.186-blue.svg?style=flat-square)](https://github.com/mburakmmm/nox-lang)
-[![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-success.svg?style=flat-square)](CHANGELOG.md)
+[![NOX](https://img.shields.io/badge/NOX-v2.2.38-blue.svg?style=flat-square)](https://github.com/mburakmmm/nox-lang)
+[![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-success.svg?style=flat-square)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Dual Backend](https://img.shields.io/badge/Backends-LLVM%20%7C%20QBE%20100%25%20Green-brightgreen.svg?style=flat-square)](tests/)
 [![Security: Fail--Closed](https://img.shields.io/badge/Security-Fail--Closed-red.svg?style=flat-square)](docs/security.md)
@@ -212,7 +212,7 @@ noxc test --backend llvm
 noxc test --backend qbe
 ```
 
-### Test Suite Coverage (24 Suites, 100% Passing)
+### Test Suite Coverage (25 Suites, 100% Passing)
 
 | Test Suite | Purpose | Backends |
 | :--- | :--- | :---: |
@@ -231,6 +231,7 @@ noxc test --backend qbe
 | `tests/remote_provider_test.nox`| Remote HTTPS provider, SSRF protection, redirect defense, DNS pinning | LLVM & QBE |
 | `tests/reload_test.nox` | Seqlock atomic reloads, rollback & `AtomicRef` multi-worker bus | LLVM & QBE |
 | `tests/integrity_test.nox` | BLAKE3 / SHA3-256 checksums, Ed25519 signature verification & `SignedConfigSource` | LLVM & QBE |
+| `tests/sealed_test.nox` | Authenticated AEAD envelopes & encrypted bundles (`XChaCha20-Poly1305` / `AES-256-GCM`) | LLVM & QBE |
 | `tests/extras_clibs_test.nox` | Opt-in JSON5/JSONC (`nox.yyjson`), PCRE2 JIT (`nox.pcre2`), xxHash dirty-check (`nox.xxhash`) | LLVM & QBE |
 | `tests/property_test.nox` | Seeded `nox.property` fuzz tests for parser, redaction, merge & cache invariants | LLVM & QBE |
 | `tests/benchmark_test.nox` | 1,000+ key load, 500k seqlock reads & `monotonic_ns()` O(n) redaction benchmark | LLVM & QBE |

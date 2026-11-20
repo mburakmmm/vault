@@ -7,6 +7,8 @@
 from core.snapshot import ConfigSnapshot
 from nox.atomic import AtomicRef, new_ref, from_ref_handle
 
+__all__: list[str] = ["SharedConfigBus", "create_config_bus", "attach_config_bus"]
+
 class SharedConfigBus:
     _ref: AtomicRef
     _is_owner: bool

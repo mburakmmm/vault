@@ -22,12 +22,11 @@ ERR_CONFIG_FORMAT_VIOLATION: str = "CONFIG_FORMAT_VIOLATION"
 class ConfigError(Exception):
     code: str
     key: str
-    message: str
 
     def __init__(self: ConfigError, code: str, key: str, msg: str) -> None:
+        super().__init__(msg)
         self.code = code
         self.key = key
-        self.message = msg
 
     def to_string(self: ConfigError) -> str:
         return "[" + self.code + "] key='" + self.key + "': " + self.message

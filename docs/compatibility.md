@@ -1,10 +1,10 @@
-# NOX v2.1.186 Compatibility & Capability Probe Report
+# NOX v2.2.38 Compatibility & Capability Probe Report
 
-> **Compiler Baseline:** `noxc 2.1.186` (upgraded from `2.0.123` / `2.1.0`)  
+> **Compiler Baseline:** `noxc 2.2.38` (upgraded from `2.1.186`)  
 > **Platform Tested:** Windows 10/11 x64 (cross-checked in CI on Linux x64, Linux ARM64, macOS ARM64, Windows x64)  
 > **Backends Tested:** LLVM (`noxc test --backend llvm`), QBE (`noxc test --backend qbe`)  
 > **Profile:** Hosted (`vault.nox` core remains portable and free of `noxclibs` / `dynamic_code`)  
-> **Date:** 2026-11-16
+> **Date:** 2026-11-20
 
 ---
 
@@ -26,7 +26,8 @@
 | **PROBE-12** | `nox.argparse` & `nox.property` | **PASS** | Pure-NOX `ArgumentParser` handles subcommands, `--opt=val`, flags, and positionals. `nox.property.check` runs seeded deterministic fuzzing with shrinking. |
 | **PROBE-13** | Opt-In `noxclibs` (`yyjson`, `pcre2`, `xxhash`) | **PASS** (Hosted) | Embedded C archive `noxclibs.a` is linked **only** when opt-in submodules (`sources.json5`, `schema.pcre2`, `sources.fast_hash`) are imported. Core `import vault` does not pull `noxclibs` or require `dynamic_code`. |
 | **PROBE-14** | Monotonic Time (`monotonic_ns`, `boot_ms`) | **PASS** | `nox.time.monotonic_ns()` provides nanosecond timing; `nox.time.sleep_ms()` yields cooperatively inside async fibers on macOS, Linux, and Windows (`WSAPoll`). |
-| **PROBE-15** | Module Import Isolation & HTTP Pinning Boundary | **PASS / BLOCKED (Upstream)** | Moving CLI execution out of `cli/main.nox` to `cli/entry.nox` ensures `import vault` has zero CLI/process side effects. Note: `nox.http.request` and `nox.tls.connect` in NOX `2.1.186` still do not accept separate `connect_ip` + SNI socket pinning; `StrictPinnedHttpTransport` remains fail-closed. |
+| **PROBE-15** | Module Import Isolation, Pinned HTTP, AEAD, `os.environ` & `json.pos_*` | **PASS** | `cli/entry.nox` isolates host CLI args. Under `noxc 2.2.38`, `PinnedHttpTransport` uses `nox.http.request(..., connect_ip=, ca_file=)` + `nox.dns.resolve` + `nox.ip.is_global_text`; `nox.crypto.aead_seal`/`open` powers `secrets.sealed`; `nox.os.environ` powers prefix discovery; `nox.json.pos_*` accelerates JSON traversal while preserving `1.0` float vs `int64`. |
+| **PROBE-16** | Exception Subclass Slots (`super().__init__`) & `__all__` Constraints | **PASS (Workarounds Applied)** | `Exception` subclasses MUST call `super().__init__(msg)` and MUST NOT redeclare `message`/`line`/`cause` (`core/errors.nox`, `env/parser.nox`). `__all__` is enforced on pure function/class modules (`core/merge.nox`, `core/builder.nox`, `reload/bus.nox`) because `2.2.38` rejects constants in `__all__`. |
 
 ---
 

@@ -1,0 +1,114 @@
+# VAULT — AEAD Sealed Secrets & Encrypted Bundle Test Suite
+
+from nox.test import assert_true, assert_eq_str, assert_eq_int
+from nox.fs import write_string, remove_file, exists
+import nox.crypto
+from vault import ConfigBuilder, ConfigSchema, ConfigSnapshot, ConfigError, ERR_CONFIG_SECRET_SOURCE_DENIED, ERR_CONFIG_PARSE_ERROR
+from secrets.mark import SecretValue
+from secrets.sealed import SealedEnvelope, seal_secret, open_secret, seal_config_bundle, open_config_bundle, sealed_envelope_from_json
+
+def test_seal_and_open_secret_roundtrip() -> None:
+    key_32: str = nox.crypto.secure_random_hex(32)
+    env: SealedEnvelope = seal_secret(key_32, "API_KEY", "sk_live_secret_value_xyz", "production", "xchacha20-poly1305")
+    assert "sk_live_secret_value_xyz" not in env.to_json()
+    assert key_32 not in env.to_json()
+    assert env.to_string() == "SealedEnvelope(version=v1, alg=xchacha20-poly1305, profile=production, ciphertext=[REDACTED])"
+
+    # Deserialize and decrypt
+    restored: SealedEnvelope = sealed_envelope_from_json(env.to_json())
+    sec: SecretValue = open_secret(key_32, "API_KEY", restored, "production")
+    assert sec.reveal() == "sk_live_secret_value_xyz"
+    assert sec.to_string() == "[REDACTED]"
+
+    # ChaCha20-Poly1305 & AES-256-GCM support
+    env_cc: SealedEnvelope = seal_secret(key_32, "DB_PASS", "db_p@ss", "base", "chacha20-poly1305")
+    assert open_secret(key_32, "DB_PASS", env_cc, "base").reveal() == "db_p@ss"
+
+    env_aes: SealedEnvelope = seal_secret(key_32, "JWT_KEY", "jwt_secret_abc", "base", "aes-256-gcm")
+    assert open_secret(key_32, "JWT_KEY", env_aes, "base").reveal() == "jwt_secret_abc"
+    print("PASS: test_seal_and_open_secret_roundtrip")
+
+def test_sealed_tamper_and_aad_rejection() -> None:
+    key_good: str = nox.crypto.secure_random_hex(32)
+    key_wrong: str = nox.crypto.secure_random_hex(32)
+    env: SealedEnvelope = seal_secret(key_good, "DB_PASS", "super_secret_pw", "production")
+
+    # Wrong key fails closed
+    wrong_key_denied: bool = False
+    try:
+        open_secret(key_wrong, "DB_PASS", env, "production")
+    except ConfigError as err:
+        wrong_key_denied = err.code == ERR_CONFIG_SECRET_SOURCE_DENIED and "super_secret_pw" not in err.message and key_wrong not in err.message
+    assert wrong_key_denied, "wrong key must fail closed without leaking secrets"
+
+    # Key substitution (AAD mismatch) fails closed
+    aad_key_denied: bool = False
+    try:
+        open_secret(key_good, "OTHER_KEY", env, "production")
+    except ConfigError as err2:
+        aad_key_denied = err2.code == ERR_CONFIG_SECRET_SOURCE_DENIED
+    assert aad_key_denied, "AAD key_name substitution must fail closed"
+
+    # Profile mismatch fails closed
+    prof_denied: bool = False
+    try:
+        open_secret(key_good, "DB_PASS", env, "staging")
+    except ConfigError as err3:
+        prof_denied = err3.code == ERR_CONFIG_SECRET_SOURCE_DENIED
+    assert prof_denied, "profile mismatch must fail closed"
+
+    # Ciphertext tamper fails closed
+    tampered: SealedEnvelope = SealedEnvelope(env.version, env.algorithm, env.format_name, env.profile, env.nonce_hex, "00" + env.ciphertext_hex[2:len(env.ciphertext_hex)])
+    tamper_denied: bool = False
+    try:
+        open_secret(key_good, "DB_PASS", tampered, "production")
+    except ConfigError as err4:
+        tamper_denied = err4.code == ERR_CONFIG_SECRET_SOURCE_DENIED
+    assert tamper_denied, "ciphertext tamper must fail closed"
+    print("PASS: test_sealed_tamper_and_aad_rejection")
+
+def test_sealed_config_source_in_builder() -> None:
+    key_32: str = nox.crypto.secure_random_hex(32)
+    bundle_path: str = "fixtures/temp_sealed_bundle.json"
+    raw_dotenv: str = "DB_PASS=sealed_db_secret_987\nAPI_TOKEN=sealed_tok_456\n"
+    sealed_json: str = seal_config_bundle(key_32, raw_dotenv, "dotenv", "production")
+    write_string(bundle_path, sealed_json)
+
+    schema: ConfigSchema = ConfigSchema()
+    schema.add_string("DB_PASS", True, False, "", True, True)
+    schema.add_string("API_TOKEN", True, False, "", True, True)
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_allowed_root("fixtures")
+    b.with_profile("production")
+    b.with_schema(schema)
+    b.with_sealed_file(bundle_path, key_32, False)
+
+    snap: ConfigSnapshot = b.build()
+    assert snap.is_secret("DB_PASS")
+    assert snap.get_secret("DB_PASS") == "sealed_db_secret_987"
+    assert snap.get_secret("API_TOKEN") == "sealed_tok_456"
+    assert "sealed_db_secret_987" not in snap.redacted_json()
+    assert "[REDACTED]" in snap.redacted_json()
+
+    # Wrong key fails closed on ConfigBuilder.build()
+    wrong_key: str = nox.crypto.secure_random_hex(32)
+    b_bad: ConfigBuilder = ConfigBuilder()
+    b_bad.with_allowed_root("fixtures")
+    b_bad.with_profile("production")
+    b_bad.with_sealed_file(bundle_path, wrong_key, False)
+    bad_caught: bool = False
+    try:
+        b_bad.build()
+    except ConfigError as err_b:
+        bad_caught = err_b.code == ERR_CONFIG_SECRET_SOURCE_DENIED
+    assert bad_caught, "SealedConfigSource with wrong key must fail closed"
+
+    if exists(bundle_path):
+        remove_file(bundle_path)
+    print("PASS: test_sealed_config_source_in_builder")
+
+test_seal_and_open_secret_roundtrip()
+test_sealed_tamper_and_aad_rejection()
+test_sealed_config_source_in_builder()
+print("SEALED_TEST: ALL PASS")

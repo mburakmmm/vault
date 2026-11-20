@@ -5,6 +5,29 @@ All notable changes to the `vault` library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-20 (NOX v2.2.38 Integration — Genuine IP-Pinned HTTPS, Native DNS, AEAD Sealed Bundles, Prefix Env Discovery & Exception Base Fix)
+
+### Added
+- **Genuine IP-Pinned HTTPS & Native DNS Resolution (`providers/remote_http.nox`, `NET-PIN-UPSTREAM`):**
+  - Added `PinnedHttpTransport(ca_file="")` (`supports_socket_pinning() == True`, `supports_tls_server_name() == True`) using NOX `v2.1.195+` / `v2.2.38` `nox.http.request(..., connect_ip=..., ca_file=...)` to dial pre-validated resolved IPs directly while verifying TLS SNI/SAN against the original hostname.
+  - Set `PinnedHttpTransport()` as the default transport when `RemoteHttpSecretProvider(..., strict_pinning=True, transport=None)`, while retaining `StrictPinnedHttpTransport` fail-closed interception for custom unpinned transports.
+  - Replaced `nslookup` subprocess execution in `SystemDnsResolver` with native bounded `nox.dns.resolve(...)` (`DnsError`, `DnsTimeoutError`, `DnsCapabilityError`).
+  - Strengthened SSRF IP classification via `nox.ip.is_global_text()` (blocking NAT64 `64:ff9b::/96`, IPv4-mapped loopback/private, Oracle/Alibaba/AWS IPv6 metadata `fd00:ec2::254`) and added RFC 6454 origin-aware credential header stripping (`Authorization`, `Cookie`, `Proxy-Authorization`, custom auth headers) across redirects.
+- **Opt-In AEAD Secret Sealing & Encrypted Config Bundles (`secrets/sealed.nox`, `sources/sealed.nox`, `core/builder.nox`, `tests/sealed_test.nox`):**
+  - Added `SealedEnvelope`, `seal_secret()`, `open_secret()`, `seal_config_bundle()`, `open_config_bundle()`, `SealedConfigSource`, and `ConfigBuilder.with_sealed_file()` powered by `nox.crypto.aead_seal`/`aead_open` (`xchacha20-poly1305` default, `chacha20-poly1305`, `aes-256-gcm`, `aes-128-gcm`) bound to profile + key/format AAD context.
+- **Safe Prefix-Scoped OS Environment Discovery (`env/process.nox`, `core/builder.nox`, `tests/env_process_test.nox`):**
+  - Added `ProcessEnvSource.from_prefix()`, `process_env_from_prefix()`, and `ConfigBuilder.with_env_prefix()` backed by NOX `nox.os.environ()`. Enforces non-empty prefix fail-closed, bounded key ceiling, nested `__` dotted normalization, canonical collision rejection (`ERR_CONFIG_DUPLICATE_KEY`), and opt-in auto-marking for sensitive suffixes (`_SECRET`, `_KEY`, `_TOKEN`, `_PASSWORD`, `_PASS`, `_PRIVATE_KEY`).
+- **Compile-Time Visibility Guards & Adapter Lifecycle Tests (`core/merge.nox`, `core/builder.nox`, `reload/bus.nox`, `tests/adapters_test.nox`):**
+  - Added `__all__` public surface enforcement to leaf function/class modules and added `test_eco_01_adapter_reload_and_secret_rotation()` exercising multi-adapter (`AetherConfig` + `NyxConfig`) reload, rollback, and secret rotation.
+
+### Fixed & Improved
+- **Fixed Inherited `Exception` Base Slot Bug (`core/errors.nox`, `env/parser.nox`):**
+  - `ConfigError` and `EnvParseError` now call `super().__init__(msg)` without redeclaring inherited `Exception.message`/`line` fields, eliminating an `0xC0000005` access violation in `test_cli_validate_failure` on `noxc 2.2.38` and a prior `None` print bug on `2.1.186`.
+- **Zero-Node JSON Tape Cursor Traversal (`sources/json.nox`):**
+  - Upgraded `JsonSource.load()` to traverse containers and scalars with `nox.json.pos_*` cursor primitives (`v2.2.4+`) while retaining `number_text()` checks so `1.0` remains `VAL_FLOAT` and exact 64-bit integers (`> 2^53`) remain `VAL_INTEGER`.
+- **Restored Recursive CLI Subprocess Verification & Updated Workflows (`tests/cli_test.nox`, `.github/workflows/*.yml`, `docs/`, `nox_limitations.md`):**
+  - Re-enabled live `Command("noxc").arg("run")` checks inside `tests/cli_test.nox` (unblocked by NOX `v2.2.0-rc.2` Windows parent-env inheritance fix), updated CI/Release matrices to `v2.2.38`, and added an explicit `noxc sbom` gate asserting `"nox:native": "false"` and `"nox:bin": "true"`.
+
 ## [1.1.0] - 2026-11-16 (NOX v2.1.186 Ecosystem Upgrade — Exact JSON Int64, Ed25519 Signed Bundles, Lock-Free AtomicRef Worker Bus & Opt-In Accelerated Modules)
 
 ### Added

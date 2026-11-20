@@ -3,6 +3,7 @@
 
 from core.builder import ConfigBuilder
 from core.snapshot import ConfigSnapshot
+from reload.manager import ReloadManager, ReloadResult
 from schema.fields import ConfigSchema
 from sources.memory import MemorySource
 from adapters.aether import AetherConfig, build_aether_schema, extract_aether_config
@@ -147,8 +148,56 @@ def test_nova_adapter() -> None:
 def test_core_isolation() -> None:
     # Importing vault core is completely independent of adapter definitions
     v: str = vault.version()
-    assert len(v) > 0
+    assert v == "1.2.0"
     print("PASS: test_core_isolation")
+
+def test_eco_01_adapter_reload_and_secret_rotation() -> None:
+    # ECO-01: Simulate live service bootstrap -> config reload -> invalid reload rollback -> secret rotation
+    # using both AetherConfig (HTTP) and NyxConfig (web/session secret) on unified ReloadManager.
+    schema: ConfigSchema = build_aether_schema("http")
+    nyx_schema: ConfigSchema = build_nyx_schema("app")
+    nyx_keys: list[str] = nyx_schema.keys()
+    idx: int = 0
+    while idx < len(nyx_keys):
+        k: str = nyx_keys[idx]
+        schema.add_field(nyx_schema.get_field(k))
+        idx = idx + 1
+
+    mem: MemorySource = MemorySource("service_runtime", 9, "production", False)
+    mem.set_string("http.host", "0.0.0.0")
+    mem.set_string("http.port", "8080")
+    mem.set_string("app.session_secret", "initial_session_secret_001")
+    mem.set_string("app.debug_mode", "false")
+
+    b: ConfigBuilder = ConfigBuilder()
+    b.with_profile("production")
+    b.with_schema(schema)
+    b.with_source(mem)
+
+    mgr: ReloadManager = ReloadManager(b)
+    snap1: ConfigSnapshot = mgr.snapshot()
+    a1: AetherConfig = extract_aether_config(snap1, "http")
+    n1: NyxConfig = extract_nyx_config(snap1, "app")
+    assert a1.port == 8080
+    assert n1.session_secret == "initial_session_secret_001"
+    assert "initial_session_secret_001" not in snap1.redacted_json()
+
+    # Invalid update (out-of-range port 99999) MUST fail closed & keep initial service config intact
+    mem.set_string("http.port", "99999")
+    bad_rel: ReloadResult = mgr.reload()
+    assert not bad_rel.success
+    assert extract_aether_config(mgr.snapshot(), "http").port == 8080
+
+    # Valid secret rotation + port change succeeds atomically
+    mem.set_string("http.port", "8443")
+    mem.set_string("app.session_secret", "rotated_session_secret_002")
+    ok_rel: ReloadResult = mgr.reload()
+    assert ok_rel.success
+    snap2: ConfigSnapshot = mgr.snapshot()
+    assert extract_aether_config(snap2, "http").port == 8443
+    assert extract_nyx_config(snap2, "app").session_secret == "rotated_session_secret_002"
+    assert "rotated_session_secret_002" not in snap2.redacted_json()
+    print("PASS: test_eco_01_adapter_reload_and_secret_rotation")
 
 # Run all test functions
 test_aether_adapter()
@@ -157,4 +206,5 @@ test_feather_adapter()
 test_noxen_adapter()
 test_nova_adapter()
 test_core_isolation()
+test_eco_01_adapter_reload_and_secret_rotation()
 print("ALL ECOSYSTEM ADAPTER TESTS PASSED SUCCESSFULLY!")

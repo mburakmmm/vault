@@ -5,6 +5,8 @@ from core.types import ConfigEntry, ConfigValue, VAL_OBJECT, VAL_ARRAY, SourceOr
 from core.errors import ConfigError, ERR_CONFIG_TYPE_MISMATCH
 from sources.interface import ConfigSource
 
+__all__: list[str] = ["merge_sources"]
+
 def _sort_sources(sources: list[ConfigSource]) -> list[ConfigSource]:
     result: list[ConfigSource] = []
     idx: int = 0

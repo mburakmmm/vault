@@ -11,7 +11,7 @@ from nox.argparse import ArgumentParser, Namespace, ArgumentError
 import nox.os
 import nox.strings
 
-CLI_VERSION: str = "1.1.0"
+CLI_VERSION: str = "1.2.0"
 
 def _build_parser() -> ArgumentParser:
     root: ArgumentParser = ArgumentParser(

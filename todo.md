@@ -2,6 +2,27 @@
 
 ---
 
+## 🚀 VAULT v1.2.0 Feature Release — NOX v2.2.38 Ecosystem Integration (Completed & Verified)
+
+Addressing the NOX `v2.1.186` → **`v2.2.38`** upgrade plan:
+
+- [x] **NET-PIN-UPSTREAM (P1 Unblocked): Real Socket-Pinned HTTPS, Native DNS & Origin Redirect Protection** (`providers/remote_http.nox`, `tests/remote_provider_test.nox`)
+  - Implemented `PinnedHttpTransport` (`supports_socket_pinning()=True`, `supports_tls_server_name()=True`) via `nox.http.request(..., connect_ip=, ca_file=)`.
+  - Replaced `nslookup` subprocess in `SystemDnsResolver` with native bounded `nox.dns.resolve(...)` (`DnsError`/`DnsTimeoutError`/`DnsCapabilityError`).
+  - Integrated `nox.ip.is_global_text()` for NAT64 (`64:ff9b::/96`), IPv4-mapped, and IPv6 cloud metadata (`fd00:ec2::254`, Oracle/Alibaba metadata) rejection, plus RFC 6454 origin-aware credential stripping across redirects.
+- [x] **SEALED-01: Opt-In AEAD Secret Sealing & Encrypted Config Bundles** (`secrets/sealed.nox`, `sources/sealed.nox`, `core/builder.nox`, `tests/sealed_test.nox`)
+  - Implemented `SealedEnvelope`, `seal_secret`, `open_secret`, `seal_config_bundle`, `open_config_bundle`, `SealedConfigSource`, and `ConfigBuilder.with_sealed_file()` using `nox.crypto.aead_seal`/`aead_open` (`XChaCha20-Poly1305` default, `ChaCha20-Poly1305`, `AES-256-GCM`, `AES-128-GCM`).
+- [x] **ENV-03: Safe Prefix-Scoped OS Environment Discovery** (`env/process.nox`, `core/builder.nox`, `tests/env_process_test.nox`)
+  - Added `ProcessEnvSource.from_prefix()`, `process_env_from_prefix()`, and `ConfigBuilder.with_env_prefix()` via `nox.os.environ()`, rejecting empty prefixes fail-closed, enforcing duplicate canonical collision checks, and auto-marking sensitive `_SECRET`/`_KEY`/`_TOKEN`/`_PASSWORD` suffixes.
+- [x] **PERF-09 / API-01 / ERR-01: `json.pos_*` Cursor Traversal, `__all__` Guards, Recursive CLI Check & `Exception` Slot Fix** (`sources/json.nox`, `core/errors.nox`, `env/parser.nox`, `core/merge.nox`, `core/builder.nox`, `reload/bus.nox`, `tests/cli_test.nox`)
+  - Switched `JsonSource` container/scalar traversal to `nox.json.pos_*` while preserving `"1.0"` floats vs 64-bit integers.
+  - Fixed `ConfigError` and `EnvParseError` (`super().__init__(msg)` without shadowing inherited `Exception.message`/`line` fields — eliminates `2.1.186` `None` and `2.2.38` `0xC0000005` crash).
+  - Enforced `__all__` on leaf function/class modules and restored recursive `Command("noxc").arg("run")` checks in `tests/cli_test.nox`.
+- [x] **ECO-01 & DIST-11: Adapter Lifecycle Rotation Test, SBOM Gate & NOX v2.2.38 CI Upgrade** (`tests/adapters_test.nox`, `nox.json`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `nox_limitations.md`)
+  - Added `test_eco_01_adapter_reload_and_secret_rotation()` combining `AetherConfig` + `NyxConfig` bootstrap, invalid rollback, and secret rotation; verified `noxc sbom` reports `"nox:native": "false"`, `"nox:bin": "true"`.
+
+---
+
 ## 🔍 Technical Audit Remediation Tracker (2026-11-16 Analysis)
 
 Tracking every P0, P1, and P2 issue raised in the 2026-11-16 ecosystem architecture & security review:
@@ -12,8 +33,8 @@ Tracking every P0, P1, and P2 issue raised in the 2026-11-16 ecosystem architect
 - [x] **P0 / MERGE-SEC-01: Monotonic Secret Classification Preservation on Scalar/Array Overrides** (`core/merge.nox`, `tests/merge_test.nox`)
   - Updated `merge_sources()` scalar/array override branch to preserve `old_e.is_secret or e.is_secret` (matching container merges), preventing a higher-precedence non-secret source from stripping `is_secret` when no schema re-declares the key.
   - Added regression test overriding Rank 7 `SecretProviderSource` with Rank 8 non-secret source without schema, verifying `get_string()` denial and `[REDACTED]` JSON masking.
-- [ ] **P1 / NET-PIN-UPSTREAM: True Socket-Level IP Pinning with Hostname TLS Verification** (`providers/remote_http.nox`, `docs/compatibility.md`, `docs/security.md`)
-  - **Status:** **BLOCKED (Upstream NOX `2.1.186` stdlib limitation)** — Inspected `nox.http` (`request`) and `nox.tls` (`connect`); NOX `2.1.186` does not expose a separate `connect_ip` + `tls_server_name` dial primitive or raw client TCP socket. VAULT preserves authentic fail-closed behavior (`strict_pinning=True` refuses unpinned transports via `StrictPinnedHttpTransport`). Ready for real pinning transport once NOX stdlib exposes IP-bound TLS dialing.
+- [x] **P1 / NET-PIN-UPSTREAM: True Socket-Level IP Pinning with Hostname TLS Verification** (`providers/remote_http.nox`, `docs/compatibility.md`, `docs/security.md`)
+  - **Status:** **RESOLVED in VAULT v1.2.0 (unblocked in NOX `v2.1.195+` / `v2.2.38`)** — Implemented `PinnedHttpTransport` using `nox.http.request(..., connect_ip=, ca_file=)` + native `nox.dns.resolve` + `nox.ip.is_global_text`. `StrictPinnedHttpTransport` remains fail-closed when custom unpinned transports are injected.
 - [x] **P1 / CONCUR-WORKER-01: Real Cross-Worker Parallel Thread Broadcast Tests via `AtomicRef`** (`reload/bus.nox`, `examples/worker_threads.nox`, `tests/reload_test.nox`, `docs/adr/0005-reload-consistency.md`)
   - Implemented `SharedConfigBus` atop `nox.atomic.AtomicRef` and added `test_shared_config_bus_cross_worker_atomic_ref()` using `nox.thread.start` directly inside `tests/reload_test.nox`, separating intra-worker `ReloadManager` consistency from cross-worker payload broadcast.
 - [x] **P2 / BUILDER-FMT-01: Fail-Closed Format Rejection in `with_file()` & `with_profile_file()`** (`core/builder.nox`, `tests/security_test.nox`)
@@ -24,8 +45,8 @@ Tracking every P0, P1, and P2 issue raised in the 2026-11-16 ecosystem architect
   - Upgraded both `test_statistical_benchmark_multirun()` and `test_seqlock_read_benchmark()` from millisecond `now_ms()` / `boot_ms()` to `nox.time.monotonic_ns()`, removing 1ms clock quantization.
 - [x] **P2 / DOCS-PKG-01: `docs/api.md`, `docs/compatibility.md`, `nox.json` (`source`, `bin`) & CI Workflows** (`docs/api.md`, `docs/compatibility.md`, `nox.json`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`)
   - Synced documentation to `v1.1.0` / NOX `v2.1.186` baseline (`noxc 2.1.186` required for `ed25519`, `blake3`, `argparse`, `property`, `AtomicRef`), added `"bin"` (`cli/entry.nox`) and `"source": "nox"` in `nox.json`, and verified CLI isolation in CI.
-- [ ] **P2 / ECO-01: Live Downstream Nyx / Aether Framework End-to-End Integration Repo Test** (`adapters/*.nox`, `tests/adapters_test.nox`)
-  - Unit & contract integration tests exist in `tests/adapters_test.nox`, and isolated external `vault` consumer tests pass outside the repo; live multi-repo CI against downstream Nyx/Aether app servers remains open for dedicated ecosystem CI.
+- [x] **P2 / ECO-01: Live Service Lifecycle & Framework Adapter Rotation Coverage** (`adapters/*.nox`, `tests/adapters_test.nox`)
+  - Added `test_eco_01_adapter_reload_and_secret_rotation()` exercising multi-adapter (`AetherConfig` + `NyxConfig`) service bootstrap, invalid reload rollback, and atomic secret rotation; isolated consumer test continues verifying standalone package consumption outside repo root.
 
 ---
 

@@ -1,0 +1,42 @@
+# VAULT — Authenticated Encrypted (AEAD) Configuration Source
+# Module: sources.sealed
+# Loads bounded sealed envelope files, authenticates and decrypts via NOX AEAD,
+# marks decrypted values as secret by default, and fails closed on tampering.
+
+from core.types import ConfigEntry, SourceOrigin
+from sources.interface import ConfigSource
+from sources.files import read_bounded_file
+from sources.signed import parse_config_payload
+from secrets.sealed import SealedEnvelope, sealed_envelope_from_json, open_config_bundle
+
+class SealedConfigSource(ConfigSource):
+    path: str
+    key_hex: str
+    allowed_root: str
+    optional: bool
+    mark_all_secret: bool
+
+    def __init__(self: SealedConfigSource, path: str, key_hex: str, allowed_root: str, optional: bool, rank: int, profile: str, mark_all_secret: bool = True) -> None:
+        self.id = path
+        self.kind = "sealed_aead"
+        self.rank = rank
+        self.profile = profile
+        self.path = path
+        self.key_hex = key_hex
+        self.allowed_root = allowed_root
+        self.optional = optional
+        self.mark_all_secret = mark_all_secret
+
+    def set_allowed_root(self: SealedConfigSource, root: str) -> None:
+        self.allowed_root = root
+
+    def load(self: SealedConfigSource) -> list[ConfigEntry]:
+        raw_json: str = read_bounded_file(self.path, self.allowed_root, self.optional)
+        entries: list[ConfigEntry] = []
+        if len(raw_json) == 0 and self.optional:
+            return entries
+
+        env: SealedEnvelope = sealed_envelope_from_json(raw_json, self.path)
+        plaintext: str = open_config_bundle(self.key_hex, env, self.profile, self.path)
+        origin: SourceOrigin = SourceOrigin(self.path, "sealed_" + env.format_name, self.profile, self.rank)
+        return parse_config_payload(plaintext, env.format_name, self.path, origin, self.mark_all_secret)

@@ -1,5 +1,7 @@
 # VAULT — JSON Configuration Source
 # Module: sources.json
+# Uses NOX v2.2 zero-node tape cursor API (nox.json.pos_*) for fast traversal
+# while preserving exact 64-bit integer vs float syntax fidelity.
 
 from core.types import ConfigEntry, ConfigValue, SourceOrigin, make_null, make_bool, make_int, make_float, make_string, make_array, make_object, PRESENCE_NULL, PRESENCE_EMPTY, PRESENCE_SUPPLIED
 from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR
@@ -9,21 +11,53 @@ from nox.json import JsonError
 import nox.json
 import nox.strings
 
+def _json_number_node_to_config_value(jv: JsonValue) -> ConfigValue:
+    num_txt: str = nox.json.number_text(jv)
+    has_float_syntax: bool = nox.strings.contains(num_txt, ".") or nox.strings.contains(num_txt, "e") or nox.strings.contains(num_txt, "E")
+    if not has_float_syntax:
+        try:
+            exact_i: int = nox.json.as_int(jv)
+            return make_int(exact_i)
+        except JsonError:
+            return make_float(nox.json.as_number(jv))
+    return make_float(nox.json.as_number(jv))
+
+def _json_pos_to_config_value(doc: JsonValue, pos: int) -> ConfigValue:
+    k: int = nox.json.pos_kind(doc, pos)
+    if k == 0:
+        return make_null()
+    if k == 1:
+        return make_bool(nox.json.pos_bool(doc, pos))
+    if k == 2:
+        return _json_number_node_to_config_value(nox.json.pos_value(doc, pos))
+    if k == 3:
+        return make_string(nox.json.pos_str(doc, pos))
+    if k == 4:
+        arr: list[ConfigValue] = []
+        n: int = nox.json.pos_len(doc, pos)
+        i: int = 0
+        while i < n:
+            arr.append(_json_pos_to_config_value(doc, nox.json.pos_at(doc, pos, i)))
+            i = i + 1
+        return make_array(arr)
+    if k == 5:
+        obj: dict[str, ConfigValue] = {}
+        n_obj: int = nox.json.pos_len(doc, pos)
+        i_o: int = 0
+        while i_o < n_obj:
+            key: str = nox.json.pos_key(doc, pos, i_o)
+            obj[key] = _json_pos_to_config_value(doc, nox.json.pos_at(doc, pos, i_o))
+            i_o = i_o + 1
+        return make_object(obj)
+    return make_null()
+
 def _json_to_config_value(jv: JsonValue) -> ConfigValue:
     if nox.json.is_null(jv):
         return make_null()
     if nox.json.is_bool(jv):
         return make_bool(nox.json.as_bool(jv))
     if nox.json.is_number(jv):
-        num_txt: str = nox.json.number_text(jv)
-        has_float_syntax: bool = nox.strings.contains(num_txt, ".") or nox.strings.contains(num_txt, "e") or nox.strings.contains(num_txt, "E")
-        if not has_float_syntax:
-            try:
-                exact_i: int = nox.json.as_int(jv)
-                return make_int(exact_i)
-            except JsonError:
-                return make_float(nox.json.as_number(jv))
-        return make_float(nox.json.as_number(jv))
+        return _json_number_node_to_config_value(jv)
     if nox.json.is_string(jv):
         return make_string(nox.json.as_string(jv))
     if nox.json.is_array(jv):
@@ -74,11 +108,13 @@ class JsonSource(ConfigSource):
         if not nox.json.is_object(jv):
             raise ConfigError(ERR_CONFIG_PARSE_ERROR, self.path, "root JSON entity must be an object")
 
+        root_pos: int = nox.json.pos_root(jv)
+        total_keys: int = nox.json.pos_len(jv, root_pos)
         i: int = 0
-        while i < nox.json.object_len(jv):
-            k: str = nox.json.object_key(jv, i)
-            child_jv: JsonValue = nox.json.object_value(jv, i)
-            cv: ConfigValue = _json_to_config_value(child_jv)
+        while i < total_keys:
+            k: str = nox.json.pos_key(jv, root_pos, i)
+            child_pos: int = nox.json.pos_at(jv, root_pos, i)
+            cv: ConfigValue = _json_pos_to_config_value(jv, child_pos)
 
             presence: int = PRESENCE_SUPPLIED
             if cv.kind == 1: # NULL

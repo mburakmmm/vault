@@ -11,14 +11,17 @@ from sources.json import JsonSource
 from sources.toml import TomlSource
 from sources.yaml import YamlSource
 from sources.signed import SignedConfigSource
+from sources.sealed import SealedConfigSource
 from env.source import DotenvSource
-from env.process import ProcessEnvSource
+from env.process import ProcessEnvSource, process_env_from_prefix
 from schema.fields import ConfigSchema, Field
 from schema.validate import validate_entries, ValidationReport, SafeConfigDiagnostic, populate_schema_defaults
 from profiles.overlay import validate_profile_name, is_production_profile, profile_filename
 from interpolate.resolve import resolve_interpolations
 from providers.interface import SecretProvider
 from providers.source import SecretProviderSource
+
+__all__: list[str] = ["ConfigBuilder"]
 
 class ConfigBuilder:
     sources: list[ConfigSource]
@@ -113,6 +116,11 @@ class ConfigBuilder:
         self.sources.append(ss)
         return self
 
+    def with_sealed_file(self: ConfigBuilder, path: str, key_hex: str, optional: bool = False, mark_all_secret: bool = True) -> ConfigBuilder:
+        sealed_src: SealedConfigSource = SealedConfigSource(path, key_hex, self.allowed_root, optional, 3, self.profile, mark_all_secret)
+        self.sources.append(sealed_src)
+        return self
+
     def with_profile_file(self: ConfigBuilder, base_path: str, format_name: str, optional: bool) -> ConfigBuilder:
         p_path: str = profile_filename(base_path, self.profile)
         if format_name == "json":
@@ -147,6 +155,11 @@ class ConfigBuilder:
 
     def with_process_env(self: ConfigBuilder, allowed_keys: list[str], mapping: dict[str, str]) -> ConfigBuilder:
         ps: ProcessEnvSource = ProcessEnvSource(allowed_keys, mapping, 8, "base")
+        self.sources.append(ps)
+        return self
+
+    def with_env_prefix(self: ConfigBuilder, prefix: str, normalize_nested: bool = True, mark_sensitive_secrets: bool = True) -> ConfigBuilder:
+        ps: ProcessEnvSource = process_env_from_prefix(prefix, 8, self.profile, normalize_nested, mark_sensitive_secrets)
         self.sources.append(ps)
         return self
 

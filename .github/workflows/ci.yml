@@ -21,22 +21,22 @@ jobs:
         include:
           - platform: linux-x64
             os: ubuntu-latest
-            asset: nox-lang-v2.1.186-linux-x64.tar.gz
+            asset: nox-lang-v2.2.38-linux-x64.tar.gz
             is_windows: false
 
           - platform: linux-arm64
             os: ubuntu-24.04-arm
-            asset: nox-lang-v2.1.186-linux-arm64.tar.gz
+            asset: nox-lang-v2.2.38-linux-arm64.tar.gz
             is_windows: false
 
           - platform: macos-arm64
             os: macos-latest
-            asset: nox-lang-v2.1.186-macos-arm64.tar.gz
+            asset: nox-lang-v2.2.38-macos-arm64.tar.gz
             is_windows: false
 
           - platform: windows-x64
             os: windows-latest
-            asset: nox-lang-v2.1.186-windows-x64.zip
+            asset: nox-lang-v2.2.38-windows-x64.zip
             is_windows: true
 
     steps:
@@ -57,7 +57,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download v2.1.186 -R mburakmmm/nox-lang -p "${{ matrix.asset }}"
+          gh release download v2.2.38 -R mburakmmm/nox-lang -p "${{ matrix.asset }}"
           mkdir -p "$HOME/.nox-lang"
           tar xzf "${{ matrix.asset }}" -C "$HOME/.nox-lang" --strip-components=1
           chmod +x "$HOME/.nox-lang/bin/"*
@@ -69,12 +69,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download v2.1.186 -R mburakmmm/nox-lang -p "${{ matrix.asset }}"
+          gh release download v2.2.38 -R mburakmmm/nox-lang -p "${{ matrix.asset }}"
           $InstallDir = "$env:USERPROFILE\.nox-lang"
           New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
           Expand-Archive -Path "${{ matrix.asset }}" -DestinationPath "$env:TEMP\nox_extract" -Force
-          if (Test-Path "$env:TEMP\nox_extract\nox-lang-v2.1.186-windows-x64") {
-              Copy-Item -Recurse -Force "$env:TEMP\nox_extract\nox-lang-v2.1.186-windows-x64\*" $InstallDir
+          if (Test-Path "$env:TEMP\nox_extract\nox-lang-v2.2.38-windows-x64") {
+              Copy-Item -Recurse -Force "$env:TEMP\nox_extract\nox-lang-v2.2.38-windows-x64\*" $InstallDir
           } else {
               Copy-Item -Recurse -Force "$env:TEMP\nox_extract\*" $InstallDir
           }
@@ -84,12 +84,18 @@ jobs:
         run: |
           noxc version
 
+      - name: Verify SBOM Pure NOX Flag
+        run: |
+          noxc sbom . | python -c 'import sys, json; d = json.load(sys.stdin); props = {p["name"]: p["value"] for p in d["metadata"]["component"]["properties"]}; assert props.get("nox:native") == "false", props; assert props.get("nox:bin") == "true", props; print("SBOM_OK", props)'
+
       - name: Static Type Check
         run: |
           noxc check vault.nox
           noxc check --strict-spawn-shared vault.nox
           noxc check cli/main.nox
           noxc check cli/entry.nox
+          noxc check secrets/sealed.nox
+          noxc check sources/sealed.nox
           noxc check fixtures/host_app_import_check.nox
           noxc check sources/json5.nox
           noxc check schema/pcre2.nox
@@ -133,7 +139,7 @@ jobs:
           def run_consumer() -> None:
               v: str = version()
               print("Isolated consumer running with VAULT v" + v)
-              assert_eq_str(v, "1.1.0", "version check")
+              assert_eq_str(v, "1.2.0", "version check")
 
               schema: ConfigSchema = ConfigSchema()
               schema.add_string("APP_ENV", True, False, "production", False, True)
@@ -184,7 +190,7 @@ jobs:
           def run_consumer() -> None:
               v: str = version()
               print("Isolated consumer running with VAULT v" + v)
-              assert_eq_str(v, "1.1.0", "version check")
+              assert_eq_str(v, "1.2.0", "version check")
 
               schema: ConfigSchema = ConfigSchema()
               schema.add_string("APP_ENV", True, False, "production", False, True)

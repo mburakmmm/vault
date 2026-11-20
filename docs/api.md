@@ -1,6 +1,6 @@
-# VAULT API Reference Manual (v1.1.0)
+# VAULT API Reference Manual (v1.2.0)
 
-`vault` is a reusable, framework-independent NOX 2.x library (baseline **NOX v2.1.186**) for type-safe configuration, environment management, cryptographic signature verification, and secret isolation.
+`vault` is a reusable, framework-independent NOX 2.x library (baseline **NOX v2.2.38**) for type-safe configuration, environment management, cryptographic signature verification, authenticated AEAD secret sealing, and secret isolation.
 
 ---
 
@@ -51,7 +51,7 @@ import vault
 ```
 
 ### `version() -> str`
-Returns the current stable semantic version of the VAULT library (`"1.1.0"`).
+Returns the current stable semantic version of the VAULT library (`"1.2.0"`).
 
 ---
 
@@ -101,6 +101,10 @@ builder: ConfigBuilder = ConfigBuilder()
   Enforces strict production-mode checks (no default passwords, fail-closed required secrets).
 - **`with_signed_file(path: str, format_name: str, pub_key_hex: str, signature_hex: str, optional: bool = False) -> ConfigBuilder`**  
   Loads a JSON, TOML, YAML, or `.env` file only after fail-closed pre-parse Ed25519 signature verification (`ERR_CONFIG_SIGNATURE_INVALID` on mismatch).
+- **`with_sealed_file(path: str, key_hex: str, optional: bool = False, mark_all_secret: bool = True) -> ConfigBuilder`**  
+  Loads an AEAD-encrypted configuration envelope (`XChaCha20-Poly1305` / `ChaCha20-Poly1305` / `AES-256-GCM`), authenticates against profile/format AAD, and marks decrypted entries secret by default.
+- **`with_env_prefix(prefix: str, normalize_nested: bool = True, mark_sensitive_secrets: bool = True) -> ConfigBuilder`**  
+  Safely loads only OS environment variables matching a non-empty namespace prefix (`nox.os.environ()`), mapping `PREFIX_DB__HOST` → `db.host` and auto-marking `_SECRET`/`_KEY`/`_TOKEN`/`_PASSWORD` keys.
 - **`validate_report() -> ValidationReport`**  
   Runs full merge, default injection, interpolation, and constraint checks returning all aggregated diagnostics without raising.
 - **`build() -> ConfigSnapshot`**  

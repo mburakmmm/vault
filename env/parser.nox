@@ -11,20 +11,19 @@ MAX_KEY_LENGTH: int = 128          # 128 bytes
 
 class EnvParseError(Exception):
     code: str
-    line: int
     column: int
     key: str
-    message: str
+    env_line: int
 
     def __init__(self: EnvParseError, code: str, line: int, column: int, key: str, msg: str) -> None:
+        super().__init__(msg)
         self.code = code
-        self.line = line
         self.column = column
         self.key = key
-        self.message = msg
+        self.env_line = line
 
     def to_string(self: EnvParseError) -> str:
-        return self.code + " at line " + str(self.line) + ", col " + str(self.column) + " (key: '" + self.key + "'): " + self.message
+        return self.code + " at line " + str(self.env_line) + ", col " + str(self.column) + " (key: '" + self.key + "'): " + self.message
 
 class EnvEntry:
     key: str

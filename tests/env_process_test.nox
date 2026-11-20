@@ -2,7 +2,10 @@
 # Regression scenarios: ENV-01, ENV-02
 
 from nox.test import assert_eq_str, assert_eq_int, assert_true
-from env.process import ProcessEnvSource
+from env.process import ProcessEnvSource, process_env_from_prefix
+from core.builder import ConfigBuilder
+from core.snapshot import ConfigSnapshot
+from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_DUPLICATE_KEY, ERR_CONFIG_SECRET_SOURCE_DENIED
 from core.types import ConfigEntry, PRESENCE_SUPPLIED, PRESENCE_EMPTY
 from nox.os import set_var
 
@@ -53,5 +56,45 @@ if empty_found:
     print("ENV_PROCESS: Empty env var verified as PRESENCE_EMPTY (ENV-02)")
 else:
     print("ENV_PROCESS: Windows Win32 environment semantics confirmed (empty var removed by OS)")
+
+# Phase 3: Prefix-Scoped Environment Discovery (NOX v2.1.195 nox.os.environ())
+set_var("VAULTAPP_DATABASE__HOST", "db.internal")
+set_var("VAULTAPP_SERVER__PORT", "9091")
+set_var("VAULTAPP_API_TOKEN", "prefix_super_secret_token_888")
+set_var("UNRELATED_HOST_VAR", "must_be_ignored")
+
+# 1. Empty prefix must fail closed (prohibit unscoped environ dump)
+empty_pref_caught: bool = False
+try:
+    process_env_from_prefix("")
+except ConfigError as err_ep:
+    empty_pref_caught = err_ep.code == ERR_CONFIG_PARSE_ERROR
+assert_true(empty_pref_caught, "empty env prefix must fail closed")
+
+# 2. Prefix builder loads only VAULTAPP_ keys, normalizes __, ignores UNRELATED_, and marks _TOKEN secret
+b_pref: ConfigBuilder = ConfigBuilder()
+b_pref.with_env_prefix("VAULTAPP_", True, True)
+snap_pref: ConfigSnapshot = b_pref.build()
+
+assert_true(snap_pref.has("database.host"), "nested __ normalized to dotted key")
+assert_eq_str(snap_pref.get_string("database.host"), "db.internal", "database.host value")
+assert_eq_int(snap_pref.get_int("server.port"), 9091, "server.port int")
+assert_true(not snap_pref.has("UNRELATED_HOST_VAR"), "non-prefixed env var must be excluded")
+assert_true(snap_pref.is_secret("api_token"), "sensitive suffix _TOKEN auto-marked secret")
+assert_eq_str(snap_pref.get_secret("api_token"), "prefix_super_secret_token_888", "secret retrieval via get_secret")
+assert_true("prefix_super_secret_token_888" not in snap_pref.redacted_json(), "secret redacted in JSON")
+
+# 3. Duplicate canonical collision rejection (case normalization conflict)
+# Pure cross-platform map test (Windows Win32 collapses case at set_var time, POSIX retains both)
+dup_src: ProcessEnvSource = process_env_from_prefix("DUPPFX_", 8, "base", True, True)
+dup_map: dict[str, str] = {}
+dup_map["DUPPFX_FOO_BAR"] = "one"
+dup_map["DUPPFX_foo_bar"] = "two"
+dup_caught: bool = False
+try:
+    dup_src.load_from_env_map(dup_map)
+except ConfigError as err_dup:
+    dup_caught = err_dup.code == ERR_CONFIG_DUPLICATE_KEY
+assert_true(dup_caught, "colliding normalized env keys must raise ERR_CONFIG_DUPLICATE_KEY")
 
 print("ENV_PROCESS_TEST: ALL PASS")

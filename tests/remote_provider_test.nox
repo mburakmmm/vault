@@ -8,7 +8,7 @@ from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG
 from schema.fields import ConfigSchema
 from secrets.mark import SecretValue
 from providers.interface import SecretFetchResult, ProviderHealth
-from providers.remote_http import RemoteHttpSecretProvider, HttpTransport, MockHttpTransport, StandardHttpTransport, StrictPinnedHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host, is_ip_literal, is_valid_hostname, DnsResolver, StaticDnsResolver, SystemDnsResolver, DnsResolutionResult
+from providers.remote_http import RemoteHttpSecretProvider, HttpTransport, MockHttpTransport, StandardHttpTransport, PinnedHttpTransport, StrictPinnedHttpTransport, HttpResponse, validate_https_endpoint, validate_resolved_ip, is_numeric_or_obfuscated_host, is_ip_literal, is_valid_hostname, DnsResolver, StaticDnsResolver, SystemDnsResolver, DnsResolutionResult
 import nox.strings
 
 def make_test_dns() -> StaticDnsResolver:
@@ -140,6 +140,10 @@ def test_ssrf_and_scheme_validation() -> None:
     assert not validate_resolved_ip("::ffff:10.0.0.1")
     assert not validate_resolved_ip("::ffff:169.254.169.254")
     assert not validate_resolved_ip("::ffff:127.0.0.1")
+    assert not validate_resolved_ip("64:ff9b::127.0.0.1")
+    assert not validate_resolved_ip("fd00:ec2::254")
+    assert not validate_resolved_ip("100.100.100.200")
+    assert not validate_resolved_ip("192.0.0.192")
     assert validate_resolved_ip("::ffff:93.184.216.34")
     assert validate_resolved_ip("1.1.1.1")
     assert validate_resolved_ip("8.8.8.8")
@@ -494,7 +498,8 @@ def test_net_07_socket_pinning_enforcement() -> None:
     print("PASS: test_net_07_socket_pinning_enforcement")
 
 def test_net_10_strict_socket_pinning_transport() -> None:
-    # NET-10: StrictPinnedHttpTransport unconditionally rejects requests fail-closed
+    # NET-10 / NET-PIN-UPSTREAM:
+    # 1. StrictPinnedHttpTransport unconditionally rejects requests fail-closed
     strict_t: StrictPinnedHttpTransport = StrictPinnedHttpTransport()
     rejected: bool = False
     try:
@@ -505,7 +510,28 @@ def test_net_10_strict_socket_pinning_transport() -> None:
         assert err.code == ERR_CONFIG_PROVIDER_UNAVAILABLE
     assert rejected
 
-    # RemoteHttpSecretProvider with strict_pinning=True
+    # 2. PinnedHttpTransport exposes real NOX 2.2 pinning + TLS SNI capabilities and fails closed on invalid target/IP
+    pinned_t: PinnedHttpTransport = PinnedHttpTransport()
+    assert pinned_t.supports_socket_pinning()
+    assert pinned_t.supports_tls_server_name()
+
+    pin_empty_rejected: bool = False
+    try:
+        empty_h2: dict[str, str] = {}
+        pinned_t.send_request("GET", "https://vault.corp.internal/secret", empty_h2, "", 5000, "", "vault.corp.internal")
+    except ConfigError as err2:
+        pin_empty_rejected = err2.code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert pin_empty_rejected, "PinnedHttpTransport must fail closed when connect_ip is empty"
+
+    pin_priv_rejected: bool = False
+    try:
+        empty_h3: dict[str, str] = {}
+        pinned_t.send_request("GET", "https://vault.corp.internal/secret", empty_h3, "", 5000, "127.0.0.1", "vault.corp.internal")
+    except ConfigError as err3:
+        pin_priv_rejected = err3.code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert pin_priv_rejected, "PinnedHttpTransport must fail closed on non-global connect_ip"
+
+    # 3. RemoteHttpSecretProvider(strict_pinning=True, transport=None) now defaults to live PinnedHttpTransport
     allowlist: list[str] = ["vault.corp.internal"]
     prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
         "strict_prov",
@@ -517,9 +543,9 @@ def test_net_10_strict_socket_pinning_transport() -> None:
         make_test_dns(),
         True # strict_pinning=True
     )
-    res: SecretFetchResult = prov.get("SECRET_KEY")
-    assert not res.found
-    assert res.error_code == ERR_CONFIG_PROVIDER_UNAVAILABLE
+    assert prov.transport.transport_name == "nox_pinned_https"
+    assert prov.transport.supports_socket_pinning()
+    assert prov.transport.supports_tls_server_name()
     print("PASS: test_net_10_strict_socket_pinning_transport")
 
 def test_net_09_dns_failure_fails_closed() -> None:
@@ -716,6 +742,56 @@ def test_net_16_dns_resolution_result() -> None:
 
     print("PASS: test_net_16_dns_resolution_result")
 
+class RedirectCaptureTransport(HttpTransport):
+    seen_headers: list[dict[str, str]]
+    seen_urls: list[str]
+
+    def __init__(self: RedirectCaptureTransport) -> None:
+        self.transport_name = "redirect_capture"
+        self.seen_headers = []
+        self.seen_urls = []
+
+    def supports_socket_pinning(self: RedirectCaptureTransport) -> bool:
+        return True
+
+    def supports_tls_server_name(self: RedirectCaptureTransport) -> bool:
+        return True
+
+    def send_request(self: RedirectCaptureTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
+        copied_h: dict[str, str] = {}
+        h_keys: list[str] = headers.keys()
+        i: int = 0
+        while i < len(h_keys):
+            k: str = h_keys[i]
+            copied_h[k] = headers[k]
+            i = i + 1
+        self.seen_headers.append(copied_h)
+        self.seen_urls.append(url)
+        if url == "https://vault.corp.internal/v1/secrets/TOKEN_KEY":
+            return HttpResponse(302, {}, "", True, "https://vault.corp.internal:8443/v1/secrets/TOKEN_KEY")
+        return HttpResponse(200, {}, "redirected_secret_val", False, "")
+
+def test_redirect_origin_credential_stripping() -> None:
+    # Redirecting from :443 to :8443 on same hostname changes RFC 6454 origin -> must strip auth headers
+    cap_t: RedirectCaptureTransport = RedirectCaptureTransport()
+    allowlist: list[str] = ["vault.corp.internal", "vault.corp.internal:8443"]
+    prov: RemoteHttpSecretProvider = RemoteHttpSecretProvider(
+        "redir_origin_prov",
+        "https://vault.corp.internal/v1/secrets",
+        allowlist,
+        "X-Vault-Token",
+        "super_secret_header_tok",
+        cap_t,
+        make_test_dns(),
+        True
+    )
+    res: SecretFetchResult = prov.get("TOKEN_KEY")
+    assert res.found
+    assert len(cap_t.seen_headers) == 2
+    assert "X-Vault-Token" in cap_t.seen_headers[0]
+    assert "X-Vault-Token" not in cap_t.seen_headers[1], "Auth header must be stripped when redirect changes origin port"
+    print("PASS: test_redirect_origin_credential_stripping")
+
 # Run all test functions
 test_ssrf_and_scheme_validation()
 test_hermetic_fetch_success()
@@ -733,4 +809,5 @@ test_net_11_dns_rebinding_simulation()
 test_system_dns_resolver_contract()
 test_net_15_transport_capabilities()
 test_net_16_dns_resolution_result()
+test_redirect_origin_credential_stripping()
 print("ALL REMOTE HTTP PROVIDER TESTS PASSED SUCCESSFULLY!")

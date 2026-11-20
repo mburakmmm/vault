@@ -1,23 +1,98 @@
-# VAULT — Allowlist-Only Process Environment Source
+# VAULT — Allowlist-Only & Prefix-Scoped Process Environment Source
 # Module: env.process
 
-from core.types import ConfigEntry, ConfigValue, SourceOrigin, PRESENCE_SUPPLIED, PRESENCE_EMPTY, make_string
+from core.types import ConfigEntry, SourceOrigin, PRESENCE_SUPPLIED, PRESENCE_EMPTY, make_string
+from core.errors import ConfigError, ERR_CONFIG_PARSE_ERROR, ERR_CONFIG_DUPLICATE_KEY, ERR_CONFIG_SIZE_LIMIT
 from sources.interface import ConfigSource
-from nox.os import getenv, OsError
+from nox.os import getenv, environ, OsError
+import nox.strings
+
+MAX_ENV_SOURCE_KEYS: int = 2000
+
+def _has_sensitive_suffix(raw_name: str) -> bool:
+    up: str = nox.strings.upper(raw_name)
+    return (
+        nox.strings.ends_with(up, "_SECRET")
+        or nox.strings.ends_with(up, "_KEY")
+        or nox.strings.ends_with(up, "_TOKEN")
+        or nox.strings.ends_with(up, "_PASSWORD")
+        or nox.strings.ends_with(up, "_PASS")
+        or nox.strings.ends_with(up, "_PRIVATE_KEY")
+    )
+
+def _normalize_prefixed_key(raw_name: str, prefix: str, normalize_nested: bool) -> str:
+    stripped: str = raw_name[len(prefix):len(raw_name)]
+    if len(stripped) == 0:
+        raise ConfigError(ERR_CONFIG_PARSE_ERROR, raw_name, "prefixed environment key has empty suffix after prefix")
+    if not normalize_nested:
+        return stripped
+    dotted: str = nox.strings.replace(stripped, "__", ".")
+    if nox.strings.starts_with(dotted, ".") or nox.strings.ends_with(dotted, ".") or nox.strings.contains(dotted, ".."):
+        raise ConfigError(ERR_CONFIG_PARSE_ERROR, raw_name, "invalid nested environment key segment boundary")
+    return nox.strings.lower(dotted)
 
 class ProcessEnvSource(ConfigSource):
     allowed_keys: list[str]
     key_mapping: dict[str, str]
+    env_prefix: str
+    normalize_nested: bool
+    mark_sensitive_secrets: bool
 
-    def __init__(self: ProcessEnvSource, allowed_keys: list[str], key_mapping: dict[str, str], rank: int, profile: str) -> None:
-        self.id = "os_env"
+    def __init__(self: ProcessEnvSource, allowed_keys: list[str], key_mapping: dict[str, str], rank: int, profile: str, env_prefix: str = "", normalize_nested: bool = False, mark_sensitive_secrets: bool = False) -> None:
+        self.id = "os_env" if len(env_prefix) == 0 else "os_env:" + env_prefix
         self.kind = "env"
         self.rank = rank
         self.profile = profile
         self.allowed_keys = allowed_keys
         self.key_mapping = key_mapping
+        self.env_prefix = env_prefix
+        self.normalize_nested = normalize_nested
+        self.mark_sensitive_secrets = mark_sensitive_secrets
+
+    @staticmethod
+    def from_prefix(prefix: str, rank: int = 8, profile: str = "base", normalize_nested: bool = True, mark_sensitive_secrets: bool = True) -> ProcessEnvSource:
+        cleaned: str = nox.strings.trim(prefix)
+        if len(cleaned) == 0:
+            raise ConfigError(ERR_CONFIG_PARSE_ERROR, "env_prefix", "process environment prefix cannot be empty (unscoped import prohibited)")
+        empty_keys: list[str] = []
+        empty_map: dict[str, str] = {}
+        return ProcessEnvSource(empty_keys, empty_map, rank, profile, cleaned, normalize_nested, mark_sensitive_secrets)
+
+    def _load_prefixed(self: ProcessEnvSource) -> list[ConfigEntry]:
+        return self.load_from_env_map(environ())
+
+    def load_from_env_map(self: ProcessEnvSource, all_env: dict[str, str]) -> list[ConfigEntry]:
+        raw_keys: list[str] = all_env.keys()
+        entries: list[ConfigEntry] = []
+        seen_canonical: dict[str, str] = {}
+
+        idx: int = 0
+        matched_count: int = 0
+        while idx < len(raw_keys):
+            raw_k: str = raw_keys[idx]
+            if nox.strings.starts_with(raw_k, self.env_prefix):
+                matched_count = matched_count + 1
+                if matched_count > MAX_ENV_SOURCE_KEYS:
+                    raise ConfigError(ERR_CONFIG_SIZE_LIMIT, self.env_prefix, "prefixed environment key count exceeds ceiling")
+
+                canonical: str = _normalize_prefixed_key(raw_k, self.env_prefix, self.normalize_nested)
+                if canonical in seen_canonical:
+                    raise ConfigError(ERR_CONFIG_DUPLICATE_KEY, canonical, "multiple environment keys normalize to same canonical key")
+                seen_canonical[canonical] = raw_k
+
+                raw_val: str = all_env[raw_k]
+                presence: int = PRESENCE_EMPTY if len(raw_val) == 0 else PRESENCE_SUPPLIED
+                sec_flag: bool = self.mark_sensitive_secrets and _has_sensitive_suffix(raw_k)
+                origin: SourceOrigin = SourceOrigin("os:" + raw_k, "env", self.profile, self.rank)
+                entries.append(ConfigEntry(canonical, make_string(raw_val), presence, origin, sec_flag, False))
+            idx = idx + 1
+
+        return entries
 
     def load(self: ProcessEnvSource) -> list[ConfigEntry]:
+        if len(self.env_prefix) > 0:
+            return self._load_prefixed()
+
         entries: list[ConfigEntry] = []
         idx: int = 0
         while idx < len(self.allowed_keys):
@@ -39,10 +114,14 @@ class ProcessEnvSource(ConfigSource):
                 if len(raw_val) == 0:
                     presence = PRESENCE_EMPTY
 
+                sec_flag: bool = self.mark_sensitive_secrets and _has_sensitive_suffix(env_name)
                 origin: SourceOrigin = SourceOrigin("os:" + env_name, "env", self.profile, self.rank)
-                entry: ConfigEntry = ConfigEntry(canonical_key, make_string(raw_val), presence, origin, False, False)
+                entry: ConfigEntry = ConfigEntry(canonical_key, make_string(raw_val), presence, origin, sec_flag, False)
                 entries.append(entry)
 
             idx = idx + 1
 
         return entries
+
+def process_env_from_prefix(prefix: str, rank: int = 8, profile: str = "base", normalize_nested: bool = True, mark_sensitive_secrets: bool = True) -> ProcessEnvSource:
+    return ProcessEnvSource.from_prefix(prefix, rank, profile, normalize_nested, mark_sensitive_secrets)

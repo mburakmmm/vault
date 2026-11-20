@@ -5,8 +5,12 @@ from core.errors import ConfigError, ERR_CONFIG_PROVIDER_UNAVAILABLE, ERR_CONFIG
 from providers.interface import SecretProvider, SecretFetchResult, ProviderHealth, make_fetch_success, make_fetch_not_found, make_fetch_error
 import nox.strings
 import nox.http
+import nox.dns
+import nox.ip
+import nox.url
 from nox.http import HttpError
-from nox.process import Command, Output
+from nox.dns import DnsError, DnsTimeoutError, DnsCapabilityError
+from nox.url import URL, UrlError
 
 MAX_REMOTE_RESPONSE_SIZE: int = 65536 # 64 KiB ceiling
 
@@ -42,10 +46,12 @@ class HttpTransport:
 
 class StandardHttpTransport(HttpTransport):
     enforce_socket_pinning: bool
+    ca_file: str
 
-    def __init__(self: StandardHttpTransport, enforce_socket_pinning: bool = False) -> None:
+    def __init__(self: StandardHttpTransport, enforce_socket_pinning: bool = False, ca_file: str = "") -> None:
         self.transport_name = "standard_nox_http"
         self.enforce_socket_pinning = enforce_socket_pinning
+        self.ca_file = ca_file
 
     def supports_socket_pinning(self: StandardHttpTransport) -> bool:
         return False
@@ -54,18 +60,18 @@ class StandardHttpTransport(HttpTransport):
         return False
 
     def send_request(self: StandardHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
-        # NET-07: If socket-level IP pinning is strictly required by caller policy,
-        # fail closed because nox.http stdlib does not expose raw socket binding primitives.
+        # NET-07: StandardHttpTransport preserves explicit fail-closed refusal when caller
+        # sets enforce_socket_pinning=True; use PinnedHttpTransport for genuine NOX 2.2 IP-pinned HTTPS.
         if self.enforce_socket_pinning and len(connect_ip) > 0 and len(tls_server_name) > 0:
             if connect_ip != tls_server_name:
                 raise ConfigError(
                     ERR_CONFIG_PROVIDER_UNAVAILABLE,
                     url,
-                    "socket-level IP pinning is not supported by standard nox.http; use a pinning-capable transport or disable strict enforce_socket_pinning"
+                    "socket-level IP pinning requested on unpinned StandardHttpTransport; use PinnedHttpTransport or strict_pinning=True"
                 )
 
         try:
-            res: nox.http.HttpResponse = nox.http.request(method, url, body, headers, timeout_ms)
+            res: nox.http.HttpResponse = nox.http.request(method, url, body, headers, timeout_ms, "", self.ca_file)
             is_redir: bool = res.status == 301 or res.status == 302 or res.status == 307 or res.status == 308
             redir_loc: str = ""
             if is_redir:
@@ -79,6 +85,43 @@ class StandardHttpTransport(HttpTransport):
             raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "http network or timeout error")
         except Exception:
             raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "unexpected http transport error")
+
+class PinnedHttpTransport(HttpTransport):
+    ca_file: str
+
+    def __init__(self: PinnedHttpTransport, ca_file: str = "") -> None:
+        # Unblocks P1/NET-PIN-UPSTREAM via NOX v2.1.195+/2.2.38 nox.http.request(connect_ip=..., ca_file=...)
+        # which dials the validated connect_ip directly without re-resolving DNS while verifying TLS SNI/SAN against the URL hostname.
+        self.transport_name = "nox_pinned_https"
+        self.ca_file = ca_file
+
+    def supports_socket_pinning(self: PinnedHttpTransport) -> bool:
+        return True
+
+    def supports_tls_server_name(self: PinnedHttpTransport) -> bool:
+        return True
+
+    def send_request(self: PinnedHttpTransport, method: str, url: str, headers: dict[str, str], body: str, timeout_ms: int, connect_ip: str = "", tls_server_name: str = "") -> HttpResponse:
+        if not nox.strings.starts_with(url, "https://"):
+            raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "pinned transport strictly requires https")
+        if len(connect_ip) == 0 or not validate_resolved_ip(connect_ip):
+            raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "pinned transport requires validated global connect_ip")
+
+        try:
+            res: nox.http.HttpResponse = nox.http.request(method, url, body, headers, timeout_ms, connect_ip, self.ca_file)
+            is_redir: bool = res.status == 301 or res.status == 302 or res.status == 307 or res.status == 308
+            redir_loc: str = ""
+            if is_redir:
+                if "Location" in res.headers:
+                    redir_loc = res.headers["Location"]
+                elif "location" in res.headers:
+                    redir_loc = res.headers["location"]
+
+            return HttpResponse(res.status, res.headers, res.body, is_redir, redir_loc)
+        except HttpError:
+            raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "pinned http network or tls error")
+        except Exception:
+            raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, url, "unexpected pinned http transport error")
 
 class StrictPinnedHttpTransport(HttpTransport):
     def __init__(self: StrictPinnedHttpTransport) -> None:
@@ -463,6 +506,10 @@ def validate_resolved_ip(ip: str) -> bool:
     if not is_ip_literal(cleaned):
         return False
 
+    # Cross-check against NOX 2.2 nox.ip RFC 6890 / NAT64 / cloud-metadata classification
+    if not nox.ip.is_global_text(cleaned):
+        return False
+
     # 1. IPv6 Validation
     if nox.strings.contains(cleaned, ":"):
         hextets: list[int] = parse_ipv6_hextets(cleaned)
@@ -684,8 +731,13 @@ class StaticDnsResolver(DnsResolver):
         return res.addresses
 
 class SystemDnsResolver(DnsResolver):
-    def __init__(self: SystemDnsResolver) -> None:
-        self.resolver_name = "system"
+    timeout_ms: int
+    doh_url: str
+
+    def __init__(self: SystemDnsResolver, timeout_ms: int = 5000, doh_url: str = "") -> None:
+        self.resolver_name = "nox_dns"
+        self.timeout_ms = timeout_ms
+        self.doh_url = doh_url
         self.last_error = ""
         self.last_exit_code = 0
 
@@ -696,50 +748,35 @@ class SystemDnsResolver(DnsResolver):
             return DnsResolutionResult(res_ip, True, "", "", 0)
 
         resolved: list[str] = []
-        exit_code: int = 0
         err_code: str = ""
         err_msg: str = ""
 
         try:
-            out: Output = Command("nslookup").arg(host).run()
-            exit_code = out.status
-            if out.success():
-                lines: list[str] = nox.strings.split(out.stdout, "\n")
-                seen_name: bool = False
-                for line in lines:
-                    trimmed: str = nox.strings.trim(line)
-                    if nox.strings.starts_with(trimmed, "Name:") or nox.strings.starts_with(trimmed, "name:"):
-                        seen_name = True
-                    elif seen_name:
-                        cand: str = ""
-                        if nox.strings.starts_with(trimmed, "Address:") or nox.strings.starts_with(trimmed, "address:"):
-                            c_idx: int = nox.strings.index_of(trimmed, ":")
-                            cand = nox.strings.trim(trimmed[c_idx + 1:len(trimmed)])
-                        elif nox.strings.starts_with(trimmed, "Addresses:") or nox.strings.starts_with(trimmed, "addresses:"):
-                            c_idx2: int = nox.strings.index_of(trimmed, ":")
-                            cand = nox.strings.trim(trimmed[c_idx2 + 1:len(trimmed)])
-                        elif is_ip_literal(trimmed):
-                            cand = trimmed
-
-                        if len(cand) > 0:
-                            hash_idx: int = nox.strings.index_of(cand, "#")
-                            if hash_idx >= 0:
-                                cand = nox.strings.trim(cand[0:hash_idx])
-                            if is_ip_literal(cand) and cand not in resolved:
-                                resolved.append(cand)
-
-                if len(resolved) == 0:
-                    err_code = "DNS_NO_ADDRESS_RECORDS"
-                    err_msg = "nslookup succeeded but returned no valid A or AAAA records"
-            else:
-                err_code = "DNS_QUERY_FAILED: status=" + str(out.status)
-                err_msg = "nslookup command failed with non-zero exit status"
+            raw_ips: list[str] = nox.dns.resolve(host, self.timeout_ms, self.doh_url)
+            idx: int = 0
+            while idx < len(raw_ips):
+                cand: str = nox.strings.trim(raw_ips[idx])
+                if is_ip_literal(cand) and cand not in resolved:
+                    resolved.append(cand)
+                idx = idx + 1
+            if len(resolved) == 0:
+                err_code = "DNS_NO_ADDRESS_RECORDS"
+                err_msg = "dns resolver returned no valid A or AAAA records"
+        except DnsTimeoutError:
+            err_code = "DNS_TIMEOUT"
+            err_msg = "dns lookup timed out"
+        except DnsCapabilityError:
+            err_code = "DNS_CAPABILITY_UNAVAILABLE"
+            err_msg = "network capability required for dns resolution"
+        except DnsError:
+            err_code = "DNS_QUERY_FAILED"
+            err_msg = "dns resolution failed fail-closed"
         except Exception:
-            err_code = "DNS_EXECUTABLE_UNAVAILABLE_OR_SPAWN_ERROR"
-            err_msg = "unable to execute nslookup command"
+            err_code = "DNS_RESOLVER_ERROR"
+            err_msg = "unexpected dns resolution failure"
 
         is_success: bool = len(resolved) > 0
-        return DnsResolutionResult(resolved, is_success, err_code, err_msg, exit_code)
+        return DnsResolutionResult(resolved, is_success, err_code, err_msg, 0 if is_success else 1)
 
     def resolve(self: SystemDnsResolver, host: str) -> list[str]:
         res: DnsResolutionResult = self.resolve_detailed(host)
@@ -841,6 +878,29 @@ def _validate_secret_key_path(key: str) -> None:
     if nox.strings.contains(key, "\0"):
         raise ConfigError(ERR_CONFIG_PROVIDER_UNAVAILABLE, key, "remote secret key cannot contain null bytes")
 
+def _url_origin(raw_url: str) -> str:
+    try:
+        u: URL = nox.url.parse(raw_url)
+        eff_port: int = u.port
+        if eff_port <= 0:
+            eff_port = 443 if nox.strings.lower(u.scheme) == "https" else 80
+        return nox.strings.lower(u.scheme) + "://" + nox.strings.lower(u.host) + ":" + str(eff_port)
+    except UrlError:
+        return ""
+
+def _strip_sensitive_redirect_headers(headers: dict[str, str], auth_header_name: str) -> dict[str, str]:
+    custom_lower: str = nox.strings.lower(auth_header_name)
+    out: dict[str, str] = {}
+    h_keys: list[str] = headers.keys()
+    idx: int = 0
+    while idx < len(h_keys):
+        k: str = h_keys[idx]
+        lk: str = nox.strings.lower(k)
+        if lk != "authorization" and lk != "cookie" and lk != "proxy-authorization" and lk != custom_lower:
+            out[k] = headers[k]
+        idx = idx + 1
+    return out
+
 class RemoteHttpSecretProvider(SecretProvider):
     base_url: str
     allowed_hosts: list[str]
@@ -871,7 +931,8 @@ class RemoteHttpSecretProvider(SecretProvider):
                 self.transport = transport
         else:
             if strict_pinning:
-                self.transport = StrictPinnedHttpTransport()
+                # Default to live NOX 2.2 IP-pinned HTTPS transport when caller requests strict_pinning
+                self.transport = PinnedHttpTransport()
             else:
                 self.transport = StandardHttpTransport(enforce_socket_pinning=False)
 
@@ -939,11 +1000,13 @@ class RemoteHttpSecretProvider(SecretProvider):
                 headers["Host"] = authority
                 resp: HttpResponse = self.transport.send_request("GET", current_url, headers, "", self.timeout_ms, pinned_ip, host)
 
-                # 1. Handle HTTP Redirects (PROVIDER-02): Validate new location before sending credentials
+                # 1. Handle HTTP Redirects (PROVIDER-02): Validate new location and strip credentials on origin change
                 if resp.is_redirect:
                     redir_target: str = resp.redirect_location
                     if not validate_https_endpoint(redir_target, self.allowed_hosts):
                         return make_fetch_error(ERR_CONFIG_PROVIDER_UNAVAILABLE, "redirect to unapproved or non-HTTPS endpoint blocked", self.id)
+                    if _url_origin(redir_target) != _url_origin(current_url):
+                        headers = _strip_sensitive_redirect_headers(headers, self.auth_header_name)
                     current_url = redir_target
                     # Continue loop to follow approved redirect
                 elif resp.status_code == 200:
